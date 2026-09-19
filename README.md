@@ -1,0 +1,751 @@
+# hi山财 · Android 客户端（Flutter）
+
+山东财经大学强智教务系统的第三方客户端。**由同目录仓库中的鸿蒙版（ArkTS）移植而来**，
+功能对齐，并针对 Android 重做了平台相关部分。
+
+> 仅供本人账号的正当学习用途。只读访问教务系统，低频请求。
+> 应用不保存密码（除非你主动勾选「记住账号密码」，且存入系统密钥库）。
+
+---
+
+## 一、功能
+
+| 模块 | 状态 | 说明 |
+|---|---|---|
+| 登录（图形验证码） | 完成 | 三步式；可记住账号密码（系统密钥库） |
+| 课表 | 完成 | **整周固定一屏**（7 天 × 5 节同时可见，无滚动）；按账号本地缓存，**支持本地增删改**（空白格可点）；单双周/周次过滤 |
+| 成绩 | 完成 | 学期筛选 + 搜索 + 客户端汇总（总学分/加权绩点） |
+| 培养方案 | 完成 | 课程设置总表（分组可折叠）+ **PDF 附件下载**（走系统「另存为」，文件落到用户选的位置） |
+| 通选课修读情况 | 完成 | **大类 → 具体课程**（可折叠，默认收起）；类别进度 |
+| 空教室查询 | 完成 | 全自动查询；客户端做周次过滤 |
+| 个人信息 | 完成 | 学籍卡片分组展示 |
+| 桌面卡片 | 完成 | Android App Widget，课表改动**自动同步** |
+| 动态玻璃 UI | 完成 | 全应用铺开：`GlassScaffold`/`GlassTabBar`/`GlassAppBar`、所有卡片列表（成绩/培养/通选/空教室/设置）、全部下拉选择器、弹窗与输入框 |
+| 上课提醒 | 完成 | 本地通知，系统托管，应用关闭仍触发 |
+| 校历与作息表 | 完成 | **从学校官网获取**官方校历图 + 作息时刻表；离线用缓存/内置数据 |
+| 验证码自动识别 | 完成 | ddddocr 模型本机推理，实测 92% |
+| 系统日历同步 | 未接入 | 依赖冲突已移除，见下文 |
+
+---
+
+## 二、与鸿蒙版的差异（重要）
+
+移植不是逐行翻译。凡是「为了绕开鸿蒙限制」而存在的复杂设计，
+在 Android 上都简化了：
+
+| 主题 | 鸿蒙版做法 | Android 版做法 | 为什么可以简化 |
+|---|---|---|---|
+| **验证码模型** | 只有 MindSpore Lite、只吃 `.ms`；量化模型用到不支持的算子，只能转浮点版 | 有 ONNX Runtime，**直接用 ddddocr 原版量化模型**（13MB） | 省掉 ONNX→MindIR 转换；模型更小、精度还更高 |
+| **上课提醒** | 双通道：系统代理提醒 + 应用内定时器（鸿蒙管控第三方代理提醒配额） | 单通道：`zonedSchedule` | Android 提醒由 AlarmManager 托管，应用退出照样触发，不需要应用内兜底 |
+| **桌面卡片刷新** | 存 formId 再 `updateForm` 推送 | 主应用写**整周**课表，卡片自己算「今天」+ 自排闹钟跨天刷新 | 见下方「桌面卡片为什么能及时」——Android 侧可以让卡片参与计算，不必依赖应用在后台 |
+| **系统日历** | `@kit.CalendarKit` | **已移除** | `device_calendar` 与 `flutter_local_notifications` 的 timezone 依赖互斥，且属可选增强 |
+| **培养方案 PDF** | 下载到沙箱 + 系统 PDF 能力逐页渲染成位图 | **只提供下载**（系统「另存为」），不做内嵌预览 | 见下方「为什么不做 PDF 内嵌预览」 |
+| **会话保活** | 前台每 5 分钟探测一次 | **不需要** | 课表本地缓存已保证「只看课表不打扰」 |
+| **校历 / 作息表** | 内置静态数据 + 随包图片（官网是图片 + JS 反爬，抓不到） | **联网抓官网最新**，落盘缓存，离线退回内置 | 实测官网可直接抓：正文含 HTML 作息表，两张校历图挂在 `/virtual_attach_file.vsb` 上 |
+
+### 桌面卡片为什么能及时
+
+**卡片自己算「今天」，而不是重画一份快照。**
+
+早期由主应用把「今天」算好写进 preferences、卡片只负责画。那样有三个改不掉
+的毛病：`done`（已上完）与「下一节」冻结在写入那一刻；平台的
+`updatePeriodMillis` 回调只是把同一份旧 JSON 再画一遍，等于在做无用功；
+**跨天后仍显示昨天的课**，非得打开一次应用才纠正。
+
+现在主应用写的是**整周**课表（键名 `week_snapshot`，含每门课的周次区间与
+单双周，见 `lib/data/card_snapshot_store.dart` 的 `buildWeek`），卡片每次
+`onUpdate` 都按当前时间重新筛选与排序。于是：
+
+- 平台每次定时回调、每次主应用通知，得到的都是**当下正确**的内容；
+- 跨天自愈 —— 卡片另外用 `AlarmManager.set()`（非精确闹钟，无需权限）
+  排下一次刷新，取「下一个整点」与「次日 00:00:30」中更早的那个；
+- 全程**不需要应用在后台运行**。
+
+同时保留旧格式作为兜底：读不到 `week_snapshot` 时回退渲染 `card_snapshot`，
+这样升级过程中桌面上那张旧卡片不会突然变空白。
+
+---
+
+## 三、验证码识别
+
+### 为什么用训练模型
+
+鸿蒙版实测过通用 OCR（Core Vision Kit），多种预处理组合下完全正确率只有
+**14%–42%** —— 它按自然场景文字训练，对「4 个扭曲字符」几乎不可用。
+
+开源项目 **ddddocr**（MIT 许可）专门在这类验证码上训练过。
+用同一批带真值的真实语料实测：
+
+| 方案 | 完全正确率 |
+|---|---|
+| 通用 OCR（鸿蒙版最佳组合） | 42% |
+| **ddddocr 模型（本版）** | **92%（11/12）** |
+
+唯一未命中样本（`imfr` → `jmfr`）来自一张左侧被裁断的截图，
+其真值本身存疑。
+
+### 实现
+
+- 模型：`assets/captcha.onnx`（13MB，随包内置）
+- 推理：`onnxruntime` 在**本机**完成；不上传验证码、不请求第三方服务
+- 预处理：等比缩放到高 64 → 灰度（BT.601）→ 归一化 → 右侧补白到 160
+- 解码：CTC 贪心（折叠连续重复 + 丢弃 blank）；字符表只保留 62 个字母数字
+  （完整表含两万多个汉字，没有必要全量内置）
+
+### 自动填验证码（含首次登录）
+
+所有出现图形验证码的地方都**自动识别并填入输入框**，不再要求手输：
+
+| 场景 | 行为 |
+|---|---|
+| 首次登录 | 输入账号后进入第二步，自动取图识别并填入；失败则提示手输 |
+| 会话失效后重登 | 同上；有凭据时连密码都已回填，用户可能只需点「继续」 |
+| 静默续期 | 后台自动识别并直接提交，成功则用户完全无感 |
+
+两点刻意的设计：
+
+- **是「填入」而不是「静默提交」**：识别率约九成，剩下那一成必须让用户
+  看得见并改正；直接提交错误验证码只是白费一次登录尝试。
+- **图与填入的文本必须是同一张**：早前鸿蒙版出现过「填的是识别结果、
+  显示的却是另取的一张新图」，用户直接提交必然失败，还会被误认为识别坏了。
+
+### 密码与验证码同框
+
+两步式：`账号` → `密码与验证码`。密码与验证码放在同一个圆角容器里
+（两行共用背景与边框，视觉上是一个登录框），一次提交。
+登录页与重登弹窗共用同一个 `CredentialsBox` 组件，保证两处完全一致。
+
+---
+
+## 四、工程结构
+
+```
+lib/
+├── main.dart                     入口；生命周期钩子（退后台落盘会话+卡片）
+├── common/                       constants / result(AppError) / week_calc
+├── crypto/qz_encoder.dart        登录加密（scode#sxh 算法）
+├── network/                      cookie_jar / http_client / qz_api
+├── parser/                       html_lite + 8 个页面解析器（含校历页）
+├── model/                        models / classroom_models / reminder_plan / captcha_charset
+│                                 card_layout（卡片尺寸规划：真实文本度量 + 逐级降级）
+├── data/                         pref_store / credential_store / timetable_store
+│                                 app_state / week_service / section_time_store
+│                                 reminder_service / card_snapshot_store
+│                                 captcha_model / re_auth_service
+│                                 academic_calendar（内置官方数据）
+│                                 campus_calendar_service（联网抓官网 + 缓存）
+│                                 pdf_store（附件下载与缓存）
+├── theme/theme.dart              设计令牌（与鸿蒙版同色值）
+├── theme/glass_kit.dart          玻璃外观集中定义（只用 AdaptiveGlass）
+├── widgets/                      state_views / course_editor / reauth_dialog
+│                                 credentials_box / pdf_preview / calendar_sheet
+└── pages/                        shell + login/schedule/score/plan/elective/
+                                  classroom/profile/settings
+android/app/src/main/
+├── AndroidManifest.xml                        权限 + 明文流量 + widget 注册
+├── kotlin/.../TodayCourseWidgetProvider.kt    桌面卡片
+└── res/layout/today_course_widget.xml         卡片布局
+```
+
+---
+
+## 五、构建与运行
+
+### 环境
+
+- Flutter 3.44.2（Dart 3.12）
+- Android SDK：compileSdk **36**、minSdk 24、targetSdk 36
+- **JDK 17**（必需；本机默认 Java 25 会导致 Gradle 构建失败，见下文）
+
+### 三个必须知道的环境坑
+
+1. **`FLUTTER_STORAGE_BASE_URL` 要指向 Google**：
+   ```bash
+   export FLUTTER_STORAGE_BASE_URL=https://storage.googleapis.com
+   ```
+   国内镜像（tuna）没有 `flutter_embedding_*` 的 maven 构件，
+   用镜像会报 `Could not find io.flutter:flutter_embedding_debug`。
+
+2. **compileSdk 必须显式钉住，并在根项目覆写子项目**：
+   `onnxruntime` 插件把自己钉在 compileSdk 33，而它依赖的 androidx 库要求 ≥34。
+   `android/build.gradle.kts` 里统一覆写为 36。
+   另外本机 SDK 目录名是 `android-37.0`（带小版本号，非标准），
+   所以 `app/build.gradle.kts` 也显式写 36 而不是 `flutter.compileSdkVersion`。
+
+   还需开启 Java 8+ desugaring（`flutter_local_notifications` 要求）。
+
+3. **必须用 JDK 17**（用更高的 JDK 会构建失败）：
+   ```bash
+   export JAVA_HOME="/c/Program Files/Java/jdk-17"   # 换成你自己的 JDK 17 路径
+   ```
+   踩过的坑：机器上 `java -version` 若是 21/25，而 Gradle 9.1 不支持它们 ——
+   表现是一堆看起来毫不相关的报错，例如
+   `Could not deserialize analysis from a file: .../instrumentation-hierarchy.bin`
+   （Gradle 处理 AGP 插件字节码时失败），很容易被误判成依赖或缓存问题。
+   换 JDK 17 后同一份代码直接构建成功。
+
+   顺带一个排查经验：这类「配置文件读不出来 / 目录删不掉」的报错，
+   往往是有 **残留的 Gradle daemon 占着文件**。先执行
+   `cd android && ./gradlew --stop`，再清 `~/.gradle/caches/9.1.0/transforms`，
+   基本可以解决。
+
+4. **模拟器需要 x86_64 的 `libonnxruntime.so`**：
+   `onnxruntime` 插件只打包 ARM（arm64-v8a / armeabi-v7a），
+   模拟器是 x86_64，验证码识别会**直接抛「找不到库」而识别率为 0**。
+   本仓库已把微软官方 AAR 里的 x86_64 `.so` 放到
+   `android/app/src/main/jniLibs/x86_64/`，开箱即用；
+   若升级插件版本，需重新取一次（见第七节的排查记录）。
+
+   同类教训在 PDF 上**直接绕开了**：这一版不再内嵌预览 PDF，
+   改为只提供下载（见下）—— 连 PDF 渲染库都不引，也就不存在 ABI 覆盖问题。
+
+### 为什么不做 PDF 内嵌预览
+
+曾经做过（`pdfx` → 后来换 `pdfrx`），最终整块移除。三条实测理由：
+
+1. **手势冲突**：预览组件内部的 `InteractiveViewer` 与外层列表抢竖直拖动。
+   两者的手势阈值不同（列表 `touchSlop` 18、缩放 `panSlop` 为它的两倍 36），
+   竖直拖动**总是列表先赢**，表现为「上下拖不动 PDF，得先左右滑一点」。
+2. **代价与收益不匹配**：一份培养方案十几页，展开要占近百 MB 位图缓存；
+   而用户真正想做的多半是**把文件拿走**（发给同学、打印），不是在手机小屏上读。
+3. **依赖成本**：`pdfrx` 要为每个 ABI 捆绑 6–7 MB 的 PDFium，构建时一旦拉不到
+   对应架构就直接失败（本项目遇到过 `armeabi-v7a` 缺库）。
+
+现在点「下载」交给系统的 `ACTION_CREATE_DOCUMENT`（见 `MainActivity.kt`），
+由用户选保存位置 —— 全程免权限，且文件一定在他找得到的地方。
+
+### 构建
+
+```bash
+flutter pub get
+flutter build apk --debug      # 或 --release
+```
+
+产物：`build/app/outputs/flutter-apk/app-debug.apk`
+（含 arm64-v8a / armeabi-v7a / x86_64 三个 ABI）
+
+### 运行
+
+```bash
+adb install -r build/app/outputs/flutter-apk/app-debug.apk
+adb shell am start -n com.sdufe.hisdufe_jw/.MainActivity
+```
+
+---
+
+## 六、测试
+
+```bash
+flutter test
+```
+
+**92 条断言全通过**，语料是 `test/fixtures/` 里**真实抓取的页面**（已脱敏）：
+
+- **课表卡片尺寸规划**：真实文本度量、降级优先级（先减教室行数 → 再舍单双周
+  → 最后减课名）、任何高度下都不超预算、无障碍大字号下仍不溢出
+- **出站请求安全（SSRF）**：协议白名单、主机白名单与后缀伪装、
+  IP 等价写法（十进制/十六进制/八进制/省略段/IPv6 映射）、
+  私网/保留/云元数据地址、合法公网 IP 不被误杀
+- `HtmlLite` 基础能力：实体解码、属性边界（`data-id` 不命中 `id`）、
+  `br`/块级转行、登录页判定、单元格顺序、单引号 id
+- **8 个解析器**：课表（13 门课含教师/教室/单双周）、成绩、个人信息
+  （15 字段且无子表列名假字段）、周历（21 周且周一递增 7 天）、
+  培养方案（68 门 / 162 学分 / 3434 学时 / 6 个分组）、通选课
+  （大类归并 + 可折叠）、空教室、**校历**（作息行顺序、图片地址、归一化）
+- **纯逻辑**：字符表与 CTC 解码（**含用真机原始索引做的锚点断言**）、
+  楼号严格匹配、节次代码、周次说明（区间/单双周/多段/矛盾写法）、
+  通选组归并（不丢课 / 空类别兜底 / 重名去重 / 进度条分母为 0）
+- **验证码识别链路**：内置语料存在性与命名约定、预处理尺寸、
+  字符表能解出真机日志的原始索引
+
+这套测试抓到 6 个真实缺陷（见第八节），其中 4 个是**不报错的静默错误**：
+页面看着正常，数字却不对，或者只是「一直要联网」。
+
+---
+
+## 七、一次「识别率 0%」的完整排查（值得单独记）
+
+设备上识别率显示 **0%**，而宿主侧同一模型同一批语料是 92%。
+排查后是**两个独立原因叠加**，且都属于「不报错的静默失败」：
+
+### 原因一：x86_64 缺少 libonnxruntime.so
+
+```
+Failed to load dynamic library 'libonnxruntime.so': dlopen failed: library "libonnxruntime.so" not found
+```
+
+`onnxruntime` 这个 Flutter 插件**只打包了 arm64-v8a 与 armeabi-v7a**，
+而模拟器是 x86_64 —— 于是模型永远加载不了，每次识别都返回「未识别」。
+真机（arm64）不受影响，所以这个问题只在模拟器上暴露。
+
+修法：从微软官方 `onnxruntime-android` AAR 里取出 x86_64 的
+`libonnxruntime.so`，放到 `android/app/src/main/jniLibs/x86_64/`。
+插件请求的是 ONNX Runtime 的 C API v14，而官方 `.so` 向下兼容提供旧版本
+API，因此可以直接替换；该 `.so` 只依赖系统库，不需要额外捆绑 C++ 运行时。
+
+### 原因二：字符表配错了（更隐蔽）
+
+模型跑起来了、输出形状也正常（`steps=20 classes=8210`），但解出来的
+全是乱码，最后只剩零星几个字母：
+
+```
+idx=0,0,1769,0,0,4730,0,0,0,0,5027,0,0,4730,0,... text="jj"
+```
+
+原因是 ddddocr 有**两套字符表和两个模型**，索引→字符的映射完全不同：
+
+| 模型 | 配套字符表 | 本仓库用哪个 |
+|---|---|---|
+| `common_old.onnx`（13MB 量化） | `CHARSET_OLD` | ✅ Android 用这个 |
+| `common.onnx`（53MB 浮点） | `CHARSET_BETA` | 鸿蒙版用这个 |
+
+两者都是 8210 类、输出形状一致，**配错不会报任何错** —— 模型照常推理，
+只是查表后张冠李戴。而我把 Android 的字符表按 BETA 生成，用的却是 OLD 模型。
+
+判定方法：把设备日志里的原始 `indices` 拿到两套表里各查一次，
+哪套能解出字母数字就是对的。本例中 `4730` 在 OLD 里是 `z`、在 BETA 里是「钐」；
+换成 OLD 后 `[5806,806,7721,5961]` 正好解出语料真值 `4r36`。
+
+### 教训与对策
+
+两次都**不是编译或崩溃问题**，靠「构建通过、应用没崩」完全发现不了。
+因此做了两件事：
+
+1. **把识别率做成可复现的自检**（设置页 →「验证码识别率自检」）：
+   内置 12 张带真值的语料，一键跑出「逐张 真值 → 识别结果」。
+   任何设备上都能立刻区分「模型没加载」「预处理不对」「字符表不匹配」。
+2. **用真机日志里的原始索引写回归测试**（`test/charset_test.dart`）：
+   断言 `decode([5806,806,7721,5961]) == '4r36'`。
+   这条断言把「模型输出 → 字符」整条链路钉住，换错字符表立刻失败。
+
+## 八、移植中修掉的缺陷
+
+这几个都是**原来的代码就有的问题**，移植时被真实语料的测试暴露出来：
+
+### 1. 培养方案整页空白（嵌套表）
+
+`#mxh` 课程表**嵌套在** `#dataList` 内部，而按 id 找表的实现只扫最外层，
+于是找不到它 —— 培养方案页会显示「暂无数据」。
+修法：按 id 直接定位开标签再配平取内容，不受嵌套层级影响。
+
+### 2. 个人信息丢失关键字段（整行被当表头跳过）
+
+页面里「学籍卡片」标题写作 `学 籍 卡 片`（字间带空格），
+它后面紧跟的正是 `院系/专业/学制/班级/学号` 那一行。
+早期实现把「节标题的下一行」一律当子表列名跳过，于是**学号、姓名拼音
+等字段全部消失**（字段数从 24 掉到 15），而界面上看不出异常。
+修法：节标题判定先去掉空白；跳过的条件再加一条「该行不含冒号」——
+真实数据行含 `：`，子表列名行不含。
+
+### 3. 单双周标记自相矛盾导致丢课
+
+真实页面存在 `(4单周)` 这种写法：第 4 周是**偶数**却标了「单周」。
+无条件按单双周过滤的话，这门课在任何一周都不会显示 —— 属于静默丢课。
+修法：先判断「区间里是否真的存在符合该奇偶的周」，不存在就忽略奇偶标记，
+以显式写出的周次为准（有对应单测）。
+
+### 4. 学期为空导致课表缓存永远存不下来（静默失效）
+
+首次启动时本地没有学期记录，请求会传 `semester=''`。
+服务端返回的页面里其实**用 `selected` 标出了它认为的当前学期**，
+但解析器只收集 option 的值、从不看 `selected`，于是 `tt.semester` 一直是空串。
+而 `TimetableStore.save` 对空学期直接返回 false —— 后果是：
+
+- 每次启动都必须联网（永远没有缓存可读）；
+- 会话失效、断网时，**明明上次已经取到过课表，却什么都显示不出来**；
+- 而且全程不报任何错，只是「一直要多等一次网络」。
+
+这是排查「静默续期为什么没生效」时才发现的 —— 表面症状（要求重新登录）
+和真实原因（缓存根本没建立）隔着两层。修法：请求值优先，请求为空时取
+服务端 `selected` 项，仍然为空才退回第一项。已加回归测试。
+
+### 5. 培养方案学分/学时读错列（数字看着合理，其实是别的字段）
+
+合计行与小计行的列数**和课程行不一样**（小计 9 列、课程行 12–13 列），
+而早期实现用「从右数第 6 格=学分、第 3 格=总学时」这种固定偏移去读合计行，
+在两个不同列数的行上悄悄读错列：页面显示成「**425 学分 / 136 学时**」，
+实际取到的是「讲课学时 / 实验学时」。正确值是 162 / 3434。
+
+更麻烦的是这个页面服务端的合计行本身是坏的（填的是 `-->`）。
+修法：**不读合计行，把课程行自己加起来**。附带好处是总数能逐门课对上，
+用户可自行核对。已加回归测试（含「学时必须是学分的 5 倍以上」的量级断言，
+量级不对就说明读错了列）。
+
+### 6. 静默续期失败时弹窗打扰（与 4 同源，症状在别处）
+
+`shell.dart` 启动时会调 `markReauthPending()`，于是**一打开应用就先弹一个
+「需要重新登录」** —— 而用户可能只是想看一眼本地缓存的课表。
+同一份代码里，页面捕获到会话失效时又只调 `handlePageError`（从不置标记），
+所以「按需弹窗」这条路径其实一直没生效。
+
+修法：区分**自动加载**与**用户主动操作**，只有后者才允许弹窗：
+
+| 场景 | 行为 |
+|---|---|
+| 启动时探测到会话失效 | 用已保存的账号密码 + OCR 静默续期；失败也**不弹窗、不登出** |
+| 页面首次自动加载失败（如刚才没续上） | 内联提示「登录状态已过期，重新加载即可自动登录」，**不弹窗** |
+| 用户点「重试」/切学期/查询空教室 | 先静默续期；仍失败才弹重新验证弹窗 |
+
+#### 但「用户点导航」也曾被当成自动加载
+
+上面那条修法还有一个漏网之处：**用户点底部标签/侧栏**进入新页面时，
+新页面的 `initState` 会去拉数据 —— 这是自动加载的代码路径，
+于是被当成「非主动」，续期被「刚失败过就跳过」的间隔挡掉、
+失败也只给一句内联提示。用户的实际观感就是**还得再手动点一次「重试」**。
+
+修法是加一次性意图标记：导航发生时 `ReAuthService.noteUserIntent()` 置位，
+页面首次加载时 `consumeUserIntent()` **取走并清零**，据此把这次加载
+升级为「主动」。冷启动没有标记 → 保持安静；取走即清零 → 不会污染
+后续的自动重载。
+
+配套还改了三处：
+
+1. **续期合并（单飞）**：多个页面可能同时发现会话失效。早先只用一个布尔量
+   挡并发，后到的调用者立刻拿到失败、照样弹窗 —— 用户看到「明明在自动登录，
+   却还要我点」。现在所有等待者共享**同一个 Future**，拿到同一份结果。
+2. **尝试次数 2 → 3**：单次识别约 92%，三次把失败率压到约 0.05%，
+   这才是「不需要有任何感知」所需的量级。上限硬夹在 `kMaxLoginAttempts`，
+   且只在主动路径才轮到 3 次（无人值守路径仍只用 1 次），
+   避免把账号打到临时锁定。
+3. **本地无会话但有凭据 → 启动直接自动登录**：以前这种情况会停在登录页
+   要求重新输入账号密码（明明已经保存在密钥库）。现在把这几秒花在启动页上，
+   用户看到的只是「加载久一点」。这条路径与静默续期共用同一把「失败时刻」，
+   因此一次启动**只打一轮**登录请求（真机验证：`attempt=1`，仅 1 次 probe）。
+
+### 7. 固定一屏的课表在矮屏溢出（估算 vs 真实度量）
+
+课表改为「整周固定一屏」后，格子高度变成**确定值**，而卡片内容行数不定。
+当时用「估算行数」（拿可用高度除以行高）来决定显示几行，结果**每次低估** ——
+只减去了一个常数，漏算了卡片上下内边距、行间距与单双周那一行。
+在手机竖屏上勉强看不出来，横屏（行高骤减）时画面上直接出现
+`BOTTOM OVERFLOWED BY N PIXELS` 的黄黑警告条，左侧节次列也一样溢出。
+
+修法有两层，都值得记：
+
+1. **改用真实文本度量**（`TextPainter.computeLineMetrics`），并按
+   「信息最全 → 逐级降级」挑第一个装得下的方案；降级顺序是
+   先减教室行数 → 再舍单双周 → 最后才减课名（课名是识别「这是哪门课」
+   的唯一依据）。规划逻辑抽到 `model/card_layout.dart`，可单测。
+2. 顺带修掉一个由兜底方案引入的**更隐蔽的空白 bug**：为了防溢出用了
+   `OverflowBox` 放开高度约束，而卡片里用 `Spacer` 把单双周推到底部 ——
+   `Spacer` 是 `Expanded`，在**无界**高度下会吃掉无限空间，
+   把文字整个挤出裁剪区，表现为「有单双周徽标的卡片整张空白」。
+   改用 `spaceBetween`：在有界高度里效果相同，且不依赖 flex。
+
+教训：**估算排版高度一定会错，要用真实度量**；而「放开约束」这类兜底手段
+会与依赖约束的子组件（`Expanded`/`Spacer`）互相拆台，两者不能混用。
+
+### 8. 出站请求缺少主机校验（SSRF 风险）
+
+这是**安全**问题，不是功能问题。本应用有两处「从远端 HTML 里解析出 URL
+再发请求」的链路：
+
+- 校历图：从官网页面 `<img src=...>` 取地址后下载；
+- 培养方案 PDF：从页面里正则出附件路径后下载。
+
+这两处的 URL **完全由服务端返回的内容决定**。页面一旦被篡改或链路被改写，
+攻击者就能让应用去请求 `http://127.0.0.1:8080/`、`http://192.168.1.1/` ——
+手机上的应用一能访问内网，就变成了扫描器/跳板。
+
+修法（`lib/common/url_guard.dart`，两端同源实现）：
+
+1. 只允许 `http`/`https`；
+2. 发请求前校验主机，校历/附件**限定在学校域名**内；
+3. 拒绝 localhost、环回、私有、保留地址；
+4. **手动跟随重定向并逐跳校验** —— 只校验首个 URL 不够，
+   合法主机可以 302 到内网。
+
+写测试时用真实绕过手法验证，抓到 3 个漏网：
+
+- `http://[0:0:0:0:0:0:0:1]` —— IPv6 环回的**全写形式**（原先只挡了字面量 `::1`）；
+- `http://999.999.999.999/`、`http://256.1.1.1/` —— 非法 IPv4 被当成「域名」放行。
+
+同时避免修过头：第一版 fail-closed 规则把 `8.8.8.8` 这类**合法公网 IP**
+也误杀了，因此改成「先判断能否解析成 IP，再决定按网段拦还是按非法字面量拦」。
+
+---
+
+## 八点五、动态玻璃 UI
+
+外观参数集中在 `lib/theme/glass_kit.dart`，改参数只改这一处。
+
+**两条硬约束**（都已写进代码注释，别改回去）：
+
+1. **只用 `AdaptiveGlass`，绝不用 `LiquidGlass`。**
+   库文档明确写了 `LiquidGlass` 是 Impeller 专用，**在 Skia 上静默什么都不渲染**
+   （界面空白且不报错，最难排查）。`AdaptiveGlass` 会自动适配后端。
+   本机实测跑的是 Impeller，但低端机/Android 12 以下会回落 Skia。
+2. **玻璃只用于浮在内容之上的元素**，课表网格保持实心彩卡
+   （与彩底冲突，且 7×5 个格子同时模糊渲染有性能代价）。
+
+### 三处实测踩到的坑（都已修）
+
+1. **玻璃只在背后有内容时才好看。** 最初用 `Column` + `bottomNavigationBar`，
+   内容在两条栏**之间**、不流到栏下方，玻璃背后没东西可模糊，
+   看起来只是浅灰平铺（像素采样恒为 `F3F4F6`）。
+   改用官方推荐的 **`GlassScaffold`** 后解决 —— 它默认让内容延伸到栏下方，
+   并负责层级顺序与滚动边缘淡出。
+2. **`MaterialApp` 下必须包一层透明 `Material`。** 该库刻意不依赖 Material，
+   而 Flutter 的 `Text` 在 `MaterialApp` 下要求树里有 `Material` 祖先，
+   缺了会整屏抛 `No Material widget found`。官方 README 给的修法：
+   `MaterialApp(builder: (c, child) => Material(type: MaterialType.transparency, child: child!))`。
+3. **`extendBody` 要按页面类型选。** 库默认 `true`（内容延伸到栏下方），
+   适合滚动列表；但本应用多数页面是**固定高度布局**（课表是填满可用区域的
+   7×5 网格），内容延伸到栏下方会让顶栏压住页面自己的筛选栏。
+   因此显式设 `extendBody: false` —— 库会把 body 精确放在两栏之间（已算安全区）。
+4. **`GlassButton` 的 `label` 不画文字。** 那只是无障碍语义标签；
+   要「图标 + 文字」必须用 `GlassButton.custom` + `child`。
+
+完整改造方案见 [docs/liquid-glass-plan.md](docs/liquid-glass-plan.md)。
+
+### 9. 「全部」周次其实只显示当前周（三态混淆）
+
+周次有三种状态，而早先用**一个空串**表示其中两种：
+
+| 状态 | 过滤行为 | 日期显示 |
+|---|---|---|
+| 跟随本周（默认） | 按当前周过滤 | 当前周 |
+| 全部 | **不按周过滤** | 当前周 |
+| 第 N 周 | 按第 N 周过滤 | 第 N 周 |
+
+问题在于解析统一写了 `int.tryParse(_week) ?? _app.currentWeek` ——
+于是选「全部」（空串）也被解析成当前周，**界面说「全部」、实际只显示本周**，
+属于静默的行为不符。
+
+修法：拆成两个语义明确的解析函数，并引入 `kWeekAuto` 常量把三态写清楚：
+
+- `_filterWeek()`：过滤用，`0` 表示不过滤（「全部」）
+- `_displayWeek()`：日期用，始终落到一个真实周次
+
+**教训**：一个「空值」不该同时承担两种业务含义。
+状态数 ≥ 3 时，用显式常量而不是「空串/0」硬凑，否则必然出现
+「选项文案与真实行为不符」这类要用户踩到才会发现的问题。
+
+### 10. 全应用玻璃化时的三个关键取舍
+
+铺开玻璃时遇到两类必须处理好的问题，都不是「加个组件」那么简单：
+
+**一、列表里不能用完整折射着色器。**
+成绩、课程明细、通选这些页面动辄上百行，每行跑一遍完整着色器会明显掉帧。
+库的 `GlassQuality.minimal` 档正是为 `ListView`/表单设计的
+（比 `BackdropFilter` 快 5–10 倍，滚动时表现正确）。
+因此 `SectionCard`（全应用最通用的卡片容器）默认走 `minimal`，
+只有少量大面积的独立面板才用 `standard`。
+**把玻璃做在通用容器上**，各页自动获得统一观感 ——
+不必逐页改，也就不会出现「有的页玻璃、有的页纯白」。
+
+**二、玻璃套玻璃是反模式。**
+库作者明确禁止把交互玻璃控件（按钮/滑块/开关）放进玻璃容器：
+会双重折射、裁掉弹性动画、浪费 GPU 填充率。
+所以卡片是玻璃、**卡内的行保持透明**；弹窗内部按钮保持普通样式。
+
+**三、下拉选择器统一到单一组件。**
+原先 4 处下拉框样式与交互各不相同（贴边长列表 / 系统菜单）。
+现在全部收敛到 `showGlassPicker`（居中玻璃滚轮），
+`GlassPickerField` 负责「显示当前值」的外观，与输入框同款底衬。
+只维护一份实现，不会「改了一个忘了另一个」。
+
+---
+
+## 八点六、安装包体积为什么大（实测拆解）
+
+用 `flutter build apk` 打出来的包异常大。逐项测过之后，体积构成如下
+（数字都是实测，不是估算）：
+
+### debug 包 276 MB —— 这个数字本身不代表真实体积
+
+| 构成 | 体积 | 说明 |
+|---|---|---|
+| `kernel_blob.bin` | **80.8 MB** | **debug 独有的 Dart 内核快照**（源码中间表示） |
+| `libonnxruntime.so` × 3 ABI | 60.4 MB | 验证码识别用的推理引擎 |
+| `libflutter.so` × 3 ABI | 103.4 MB | Flutter 引擎（debug 版本身更大） |
+| `libVkLayer_khronos_validation.so` | 14.5 MB | **debug 独有的 Vulkan 校验层** |
+| `captcha.onnx` | 13.0 MB | ddddocr 验证码模型 |
+| dex + 资源 | ~23 MB | |
+
+`kernel_blob.bin` 与 Vulkan 校验层合计约 95 MB，**release 包里完全没有**。
+所以「debug 276 MB」不是需要优化的目标，真实体积要看 release。
+
+### release 单包 126 MB → **89 MB**
+
+这里发现并修掉一个我自己引入的问题：
+
+**`libonnxruntime.so` 有三个 ABI 副本**，其中 x86_64 那份（37.5 MB 解压后）
+是为了让**模拟器**能跑 OCR 才加进 `src/main/jniLibs/` 的。
+但 `src/main` 对**所有**构建生效 —— 于是真机安装包里也白带了一份
+只有模拟器才用的 37 MB 库。
+
+修法：挪到 **`src/debug/jniLibs/`**（debug-only 源集）。
+Gradle 只会在 debug 构建里包含它：
+
+- debug：仍带 x86_64 → 模拟器照常可用（已验证）
+- release：不再带 x86_64 → **126 MB → 89 MB**
+
+### 进一步：89 MB 仍偏大，且可以按 ABI 拆分
+
+剩下的体积几乎全是三个 ABI 的 Flutter 引擎 + onnxruntime 副本：
+
+```
+arm64-v8a    32.7 MB   （现代真机）
+armeabi-v7a  26.5 MB   （老真机）
+x86_64       20.6 MB   （模拟器）
+```
+
+一个真机只需要其中**一个**。用 `--split-per-abi` 实测：
+
+| 产物 | 体积 |
+|---|---|
+| `app-arm64-v8a-release.apk` | **41.8 MB** |
+| `app-armeabi-v7a-release.apk` | 35.5 MB |
+| `app-x86_64-release.apk`（仅模拟器用） | 67.2 MB |
+
+**上架建议**：用 `flutter build apk --release --split-per-abi` 或直接出 AAB
+（Play 会按设备自动下发对应 ABI）。41.8 MB 对这个应用是合理量级 ——
+其中 13 MB 是验证码模型、约 13 MB 是 onnxruntime 引擎，
+两者是「验证码自动识别」这一功能的固有成本。
+
+### 还能再减的方向（未做，需权衡）
+
+- **换更小的推理引擎**：onnxruntime 对「跑一个 13 MB 的 CRNN」而言偏重。
+  换 TFLite 或自带的 NNAPI 路径可能省下大半，但要重做一遍
+  模型转换与端上验证（本项目已在 onnxruntime 的 ABI 问题上花过一轮）。
+- **模型量化**：`captcha.onnx` 是 fp32 的 13 MB，量化到 int8 可降到约 3–4 MB。
+  **但要先验证识别率不掉** —— 本项目刚因为「字符表与模型不匹配」踩过
+  静默降精度的坑，量化属于同类风险，必须用内置语料实测对比后再定。
+- **只保留 arm64-v8a**：现代设备基本都支持，可再省 26.5 MB。
+  但对老机型不友好，属于产品取舍。
+
+## 九、已知限制
+
+- **教室查询依赖客户端周次过滤**：服务端的 `zc1`/`zc2` 参数不可靠
+  （「被借用」记录不受其影响，且筛选后会丢掉全周空闲的教室）。
+  请求时故意不传周次，由客户端判断；该决定经两次独立实现交叉验证。
+- **明文 HTTP**：学校只有 `http://jw.sdufe.edu.cn`，无 HTTPS 入口，
+  因此开了 `usesCleartextTraffic`。链路不加密是既有事实，应用侧无法修复。
+- **OCR 仍会失败（单次约 8%）**：交互路径保留「限次重试（最多 3 次）+ 手动输入」，
+  静默续期路径尝试 2 次；并且**只在验证码类失败时重试** —— 凭据类失败立即停止，
+  避免拿错误密码反复提交触发账号锁定。
+- **校历联网依赖官网结构**：官网改版会让解析失败，此时会保留上次缓存或退回内置数据，
+  并在弹窗里说明来源（「已联网获取最新 / 显示上次缓存 / 显示随应用内置的版本」）。
+  作息表若解析结果少于课表的 5 行，会**拒绝映射**（宁可继续用本地值，
+  也不按错位的时间算上课提醒）。
+- **模型许可**：ddddocr 为 MIT 许可，`assets/captcha.onnx` 来自其发行包；
+  二次分发请保留其许可声明。
+- **系统日历同步未接入**：因依赖互斥移除（见第二节）。
+- **无法编译出 HAP（Flutter for OpenHarmony）**：Flutter 官方的 OpenHarmony
+  移植（`openharmony-sig/flutter_flutter`）**最高只有 3.22.1 / Dart 3.4.0**，
+  而本项目要求 Dart `^3.12.2`（Flutter 3.44），且 `liquid_glass_widgets`
+  要求 `flutter >=3.41.0`。实测用该 fork 执行 `pub get` 直接失败：
+
+  ```
+  The current Dart SDK version is 3.4.0.
+  Because hisdufe_jw requires SDK version ^3.12.2, version solving failed.
+  ```
+
+  这不是配置问题，是上游版本落后约两年。若将来官方 fork 追到 3.41+，
+  才具备「同一份 Flutter 代码同时出 APK 与 HAP」的前提。
+
+---
+
+## 十、接口与字段（已核实）
+
+全部数据来自 `/jsxsd/` 的**服务端渲染页面**（该实例未开放 JSON 接口），
+因此需要结构化 HTML 解析（本仓库自研 `HtmlLite`）。
+
+| 能力 | 端点 | 关键参数 |
+|---|---|---|
+| 登录握手 | `POST /Logon.do?method=logon&flag=sess` | 返回 `scode#sxh` |
+| 登录 | `POST /Logon.do?method=logon` | `userAccount`/`userPassword`/`RANDOMCODE`/`encoded` |
+| 验证码 | `GET /verifycode.servlet` | 会话绑定，JPEG |
+| 课表 | `GET/POST /jsxsd/xskb/xskb_list.do` | `xnxq01id` / `zc` |
+| 成绩 | `GET /jsxsd/kscj/cjcx_list?kksj=` | 学期 |
+| 成绩学期列表 | `GET /jsxsd/kscj/cjcx_query` | 读 `kksj` 下拉 |
+| 个人信息 | `GET /jsxsd/grxx/xsxx` | `#xjkpTable` |
+| 教学周历 | `GET /jsxsd/jxzl/jxzl_query` | 周次↔日期，日期只在 `title` 属性里 |
+| 培养方案 | `GET /jsxsd/pyfa/topyfamx` | `#dataList` + 嵌套 `#mxh` |
+| 通选课 | `GET /jsxsd/xxwcqk/xstxkxdqk.do` | 两张表按表头关键字定位 |
+| 教室课表 | `GET /jsxsd/kbcx/kbxx_classroom` | 读 `xqid` / `xnxqh` 下拉 |
+| 教学楼列表 | `POST /jsxsd/kbcx/getJxlByAjax` | `xqid` |
+| 教室占用 | `POST /jsxsd/kbcx/kbxx_classroom_ifr` | `xnxqh`/`xqid`/`jzwid`/`jc1`/`jc2` |
+
+**校园网（非教务系统，独立域名、不带任何 Cookie）**：
+
+| 能力 | 端点 | 说明 |
+|---|---|---|
+| 最新校历 | `GET https://www.sdufe.edu.cn/xyfw/zxxl.htm` | 正文含 HTML「日常教学时刻表」；两张校历图为 `/virtual_attach_file.vsb?...e=.jpg`（原图属性拼作 `orisrc`） |
+
+校历抓取**刻意不复用教务系统的 `HttpClient`**：那个客户端的 CookieJar 按整串
+Cookie 头存储、不带域名作用域，请求头里还硬编码了教务系统的 `Origin`/`Referer`。
+用它去访问公网校网，等于把教务系统的会话 `JSESSIONID` 发给第三方站点。
+这里用独立的裸 http 客户端，不带任何 Cookie。
+
+登录成功后服务器返回 302 + ticket 重定向，**必须再请求一次**该地址
+才能换成学生端会话；判定不能只看状态码（成功恰恰是非 200 响应）。
+
+---
+
+## 十一、致谢
+
+这个客户端能成立，靠的是下面这些开源项目。按「在本项目里具体解决了什么」
+分组，而不是罗列一份依赖清单 —— 每条都写清楚**为什么选它**，
+其中几项是踩过坑之后换过去的（见「与鸿蒙版的差异」与「移植中修掉的缺陷」）。
+
+### UI 与视觉
+
+| 项目 | 许可 | 在本项目里的作用 |
+|---|---|---|
+| [**liquid_glass_widgets**](https://github.com/sdegenaar/liquid_glass_widgets) | MIT | 液态玻璃（Liquid Glass）效果的全部实现。**核心部分依赖 Impeller**，其在 Skia 上不渲染，因此本项目只用它自带的 `AdaptiveGlass` 自适应封装。它零第三方依赖、不含原生代码（纯 Dart + 5 个 `.frag` 着色器），这也是选它的主要原因 —— 本项目在原生依赖上吃过亏。 |
+| [**cupertino_icons**](https://github.com/flutter/packages/tree/main/packages/cupertino_icons) | MIT | iOS 风格图标字形。 |
+
+### 数据、存储与系统能力
+
+| 项目 | 许可 | 在本项目里的作用 |
+|---|---|---|
+| [**shared_preferences**](https://pub.dev/packages/shared_preferences) | BSD-3-Clause | 偏好设置持久化（Flutter 官方维护）。 |
+| [**flutter_secure_storage**](https://github.com/juliansteenbakker/flutter_secure_storage) | BSD-3-Clause | 账号密码与会话 cookie 的加密存储，底层走 Android Keystore。**会话凭据绝不进 `shared_preferences`**（那是明文 XML，实测可直接 `adb` 读出）。 |
+| [**path_provider**](https://pub.dev/packages/path_provider) | BSD-3-Clause | 定位应用私有目录（课表缓存、PDF 落盘）。 |
+| [**home_widget**](https://github.com/ABausG/home_widget) | BSD-3-Clause | 桌面「今日课程」卡片的 Dart↔原生桥。卡片刷新链的设计见「二、与鸿蒙版的差异」。 |
+| [**image_picker**](https://pub.dev/packages/image_picker) | Apache-2.0 | 头像选图（仅用选取，裁切是应用内自绘的）。 |
+
+### 通知与提醒
+
+| 项目 | 许可 | 在本项目里的作用 |
+|---|---|---|
+| [**flutter_local_notifications**](https://github.com/MaikuB/flutter_local_notifications) | BSD-3-Clause | 上课提醒的唯一通道。`zonedSchedule` 由系统 AlarmManager 托管，应用退出照样触发。**注意 v16 起要求在应用自己的 manifest 里声明 receiver**（漏了会「排期成功但永不响铃」，本项目踩过）。 |
+| [**timezone**](https://pub.dev/packages/timezone) | BSD-2-Clause | `zonedSchedule` 所需的时区计算。 |
+
+### 验证码识别
+
+| 项目 | 许可 | 在本项目里的作用 |
+|---|---|---|
+| [**ddddocr**](https://github.com/sml2h3/ddddocr) | MIT | 验证码识别模型（`assets/captcha.onnx`）。它专门在这类字符型验证码上训练过，本项目**直接使用其原版量化模型**（13 MB），实测识别率 92%。 |
+| [**onnxruntime**](https://github.com/gtbluesky/onnxruntime_flutter) | MIT | 在设备上跑 ONNX 模型。Android 侧能直接加载 ONNX，不必像鸿蒙版那样转成 MindSpore `.ms`（转换会丢掉量化、模型更大精度还更低）。 |
+| [**image**](https://github.com/brendan-duncan/image) | MIT | 验证码预处理（解码、缩放、灰度归一化）。 |
+
+### 网络与工具
+
+| 项目 | 许可 | 在本项目里的作用 |
+|---|---|---|
+| [**http**](https://github.com/dart-lang/http) | BSD-3-Clause | HTTP 客户端。教务系统返回的是服务端渲染页面，Cookie 需手工接住再回带（`JSESSIONID` 是 HttpOnly，页面 JS 读不到）。 |
+| [**flutter_lints**](https://github.com/flutter/packages/tree/main/packages/flutter_lints) | BSD-3-Clause | 静态检查规则（开发期依赖）。 |
+
+### 框架
+
+[**Flutter**](https://github.com/flutter/flutter) / [**Dart**](https://github.com/dart-lang/sdk) —— BSD-3-Clause。
+另使用了 Flutter 的 shader 机制（`shaders/top_fade_blur.frag`）实现顶部渐变模糊。
+
+---
+
+### 非代码来源
+
+- **校历与作息数据**：抓自[山东财经大学官网](https://www.sdufe.edu.cn/xyfw/zxxl.htm)
+  的公开页面（正文含 HTML 作息表、两张校历图）。抓取策略与边界见「十、接口与字段」。
+- **应用图标与校徽**：由原始笔触图反解白底得到（`tools/make_app_icon.py`），
+  非本项目原创。
+
+### 本项目自身
+
+以 MIT 许可开源，见 [LICENSE](LICENSE)。
+
+**免责声明**：本项目为个人学习用途的第三方客户端，与山东财经大学无隶属关系，
+仅供查询本人教务数据。请遵守学校相关规定，不要用于批量抓取或任何非本人用途。

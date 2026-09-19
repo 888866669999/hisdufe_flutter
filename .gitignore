@@ -1,0 +1,68 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# ===== 崩溃与运行日志 =====
+#
+# 这两类文件都**不该入库**，而且是实测踩到的（开源审计时在仓库里发现过）：
+#   - `hs_err_pid*.log`：JVM 崩溃转储，含本机完整路径、内存布局、
+#     加载的 jar 列表 —— 等于把开发机的环境信息公布出去；
+#   - `flutter_0*.log`：Flutter 崩溃报告，含调用栈与设备信息。
+#
+# `.gitignore` 顶部已有 `*.log`，但 `hs_err_pid...log` 在 android/ 子目录，
+# 且这里再写一遍是为了**意图明确**：看到这几行就知道「日志不要提交」是
+# 有意为之，而不是碰巧被 `*.log` 覆盖。
+hs_err_pid*.log
+flutter_*.log
+
+# ===== 验证码自检语料（不入库）=====
+#
+# 这些是从学校系统**实际抓取**的验证码图片（文件名里的前缀就是答案）。
+# 不含任何个人信息，但它属于第三方系统的数据，公开发布不妥；
+# 对使用者也没有必要 —— 识别效果在设备上跑一次自检就能看到。
+#
+# 本地仍保留在 tools/ocr_eval/，`flutter test` 会用它校验预处理尺寸
+# （见 test/captcha_pipeline_test.dart：目录不存在时自动跳过）。
+/tools/ocr_eval/

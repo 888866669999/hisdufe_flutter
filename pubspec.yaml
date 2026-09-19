@@ -1,0 +1,94 @@
+name: hisdufe_jw
+description: 山东财经大学强智教务系统客户端（Android · 手机/平板/折叠屏）
+publish_to: 'none'
+version: 1.0.0+1000000
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # 动态玻璃（Liquid Glass）UI。
+  # 选它的理由：**零第三方依赖**、不含任何原生代码（纯 Dart + 5 个 .frag 着色器），
+  # 因此不会重演本项目在 onnxruntime（缺 x86_64 库）与 device_calendar
+  # （依赖冲突）上踩过的坑。
+  #
+  # 注意：核心的 LiquidGlass 是 **Impeller 专用**，在 Skia 上会静默不渲染；
+  # 因此代码里只用 AdaptiveGlass（库自带的自适应封装），不要直接用 LiquidGlass。
+  liquid_glass_widgets: ^1.6.1
+
+  # 网络：自建 Cookie 管理。教务系统返回的是 Netscape cookie 文件格式，
+  # 且 JSESSIONID 是 HttpOnly（页面 JS 读不到），必须手工接住再回带。
+  http: ^1.5.0
+
+  # 本地存储
+  shared_preferences: ^2.5.3
+  flutter_secure_storage: ^11.2.0   # 对应鸿蒙版的 AssetStoreKit 系统密钥库
+  path_provider: ^2.1.5
+
+  # 通知与提醒
+  # 上课提醒的唯一通道。Android 的 zonedSchedule 由系统 AlarmManager 托管，
+  # 应用退出后照样触发 —— 因此不需要鸿蒙版那套「应用内定时器」兜底，
+  # 也不需要为了提醒而让应用常驻后台。
+  #
+  # 版本固定在 18.x 的原因（实测）：
+  #   22.x 的 android/build.gradle 里自带 `classpath 'com.android.tools.build:gradle:8.11.1'`，
+  #   与本项目的 AGP 9 冲突，配置阶段就抛
+  #   「Could not deserialize analysis from a file」（MergeInstrumentationAnalysisTransform）。
+  #   18.x 虽然也声明了自带 AGP，但在本项目的 Gradle 9 下能正常构建。
+  # 它把 androidx.core 声明成库级 implementation，消费方项目拿不到，
+  # 导致该插件自身编译报「程序包 androidx.core.app 不存在」——
+  # 这一条在 android/build.gradle.kts 里为它单独补了依赖。
+  flutter_local_notifications: ^18.0.1
+  timezone: ^0.9.4
+
+  # 桌面卡片（Android App Widget）
+  home_widget: ^0.9.4
+
+  # 验证码识别：直接用 ddddocr 的 ONNX 模型在本机推理。
+  # 注意与鸿蒙版的差别：鸿蒙没有 ONNX 运行时，被迫把模型转成 MindSpore .ms
+  # 并用不了量化版；Android 有 ONNX Runtime，可以**直接加载原版量化模型**
+  # （13MB、实测 11/12），既省事又更准。
+  onnxruntime: ^1.4.1
+  image: ^4.10.1
+
+  # 头像选图（相册）。
+  # 只用它的**选取**能力，不用它自带的裁切 —— 那是系统 UI，与本应用的
+  # 玻璃风格割裂，而且我们要自己控制输出尺寸。裁切在应用内用
+  # InteractiveViewer + Canvas 自绘（见 widgets/avatar_crop_dialog.dart），
+  # 不引入额外原生依赖。
+  #
+  # 权限：Android 13+ 用系统相册选择器（Photo Picker），**不需要**任何
+  # 存储权限；Android 12 及以下由插件走 READ_EXTERNAL_STORAGE，
+  # 插件已在其 manifest 里声明，应用侧不必再写。
+  image_picker: ^1.1.2
+
+  # 说明：曾计划接入 permission_handler（通知/日历权限）与 device_calendar
+  # （把课表写进系统日历），实测两者都没用上，且 device_calendar 与
+  # flutter_local_notifications 的 timezone 依赖互斥、permission_handler
+  # 要求 compileSdk 37（本机 AGP 上限 36）。既然功能不需要，就移除依赖，
+  # 少两个平台插件也少两处兼容性风险。
+  # 通知权限走 flutter_local_notifications 自带的 requestNotificationsPermission()。
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  # 顶部渐变模糊的渐变压暗着色器。
+  # 编译期由 Flutter 转成目标平台的着色器（Impeller / Skia 都会处理）。
+  shaders:
+    - shaders/top_fade_blur.frag
+  assets:
+    - assets/captcha.onnx
+    - assets/calendar_2026_1.jpg
+    - assets/calendar_2026_2.jpg
+    # 校徽：启动闪屏与登录页显示它，代替 Material 的 `Icons.school`
+    # （那个是「带学士帽的小人」的通用占位图，与本校无关）。
+    # 由 tools/make_app_icon.py 从原始笔触图生成（白底反解为透明）。
+    - assets/logo.png

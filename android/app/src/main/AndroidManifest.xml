@@ -1,0 +1,105 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 联网：访问教务系统 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+
+    <!-- 通知：上课提醒 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- 精确闹钟：Android 12+ 需单独声明。代码里用的是 inexactAllowWhileIdle，
+         因此即使这个权限被系统拒绝，提醒仍能触发（只是可能晚几分钟）。 -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- 开机后重排提醒：见下面 ScheduledNotificationBootReceiver 的说明 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
+    <!-- 系统日历（可选：把课表写入系统日历） -->
+    <uses-permission android:name="android.permission.READ_CALENDAR"/>
+    <uses-permission android:name="android.permission.WRITE_CALENDAR"/>
+
+    <application
+        android:label="hi山财"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="true">
+        <!-- 说明：学校教务系统只提供明文 HTTP，没有可用的 HTTPS 入口，
+             因此必须允许明文流量，否则所有请求会被系统直接拦掉。
+             这是既有事实，不是可以优化掉的配置。 -->
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <!-- 桌面「今日课程」卡片。
+             卡片只读主应用写好的快照（SharedPreferences），
+             因此不需要联网，也不需要应用在前台。 -->
+        <receiver
+            android:name=".TodayCourseWidgetProvider"
+            android:exported="true"
+            android:label="今日课程">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/today_course_widget_info"/>
+        </receiver>
+
+        <!-- ===== 上课提醒的两个 receiver（必须有，否则提醒完全不响）=====
+             这两条是**本应用必须自己声明**的：`flutter_local_notifications`
+             从 v16 起只在自己的 manifest 里保留 POST_NOTIFICATIONS 与 VIBRATE
+             两条权限，其余（包括这两个 receiver）改为要求接入方在自己的
+             AndroidManifest.xml 里声明。
+
+             漏掉 ScheduledNotificationReceiver 的后果特别隐蔽：
+             `zonedSchedule` 会成功返回、设置页也能读到「已排定 N 条」，
+             但 AlarmManager 到点发出的广播**没有任何组件接收** ——
+             提醒永远不出现，且全程不报错。这正是「提醒功能不生效」的根因。
+             （用 aapt2 dump xmltree 核对过合并后的 manifest：里面只有其它插件
+             的 receiver，没有这两个。）
+
+             BootReceiver 负责设备重启后重排提醒（系统会清空所有闹钟），
+             因此还需要上面的 RECEIVE_BOOT_COMPLETED 权限；
+             MY_PACKAGE_REPLACED 则覆盖「应用被覆盖安装」的情形。 -->
+        <receiver
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+        <receiver
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
+            </intent-filter>
+        </receiver>
+
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
+</manifest>

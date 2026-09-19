@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面「今日课程」卡片布局。
+
+  RemoteViews 的限制决定了这里必须「预先声明 + 显隐控制」：
+    - 只能使用受支持的控件（LinearLayout / FrameLayout / TextView 等）；
+    - 不能动态 addView，因此 6 行课程行要全部预先写在布局里，
+      由 Provider 按卡片高度把多余的行设为 GONE；
+    - 每个 TextView 必须有**全局唯一 id**（RemoteViews 用 id 定位控件，
+      重复 id 会定位到错的行）。
+
+  配色与主应用一致：标题用品牌蓝，次要信息用半透明黑。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:background="@drawable/widget_bg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/widget_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="hi山财"
+            android:textColor="#FF1F71FF"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#99000000"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!-- 分隔线。这里必须用 TextView 而不是 <View>：
+         RemoteViews 只允许白名单内的类，而 `android.view.View` 不在白名单里，
+         用它会直接抛 "Class not allowed to be inflated android.view.View"，
+         卡片显示成「Can't load widget」。用高度 1dp 的 TextView 画线即可。 -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="6dp"
+        android:layout_marginBottom="6dp"
+        android:background="#1A000000" />
+
+    <TextView
+        android:id="@+id/widget_empty"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="打开应用后自动显示今日课程"
+        android:textColor="#99000000"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
+    <!-- 行 1 -->
+    <LinearLayout android:id="@+id/widget_row1"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:paddingTop="3dp" android:paddingBottom="3dp">
+        <TextView android:id="@+id/row_time_1" android:layout_width="42dp"
+            android:layout_height="wrap_content" android:textColor="#FF1F71FF" android:textSize="11sp" />
+        <TextView android:id="@+id/row_name_1" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:maxLines="1" android:ellipsize="end"
+            android:textColor="#FF14161B" android:textSize="12sp" />
+        <TextView android:id="@+id/row_room_1" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:maxLines="1" android:ellipsize="end"
+            android:textColor="#99000000" android:textSize="10sp" />
+    </LinearLayout>
+
+    <!-- 行 2 -->
+    <LinearLayout android:id="@+id/widget_row2"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:paddingTop="3dp" android:paddingBottom="3dp">
+        <TextView android:id="@+id/row_time_2" android:layout_width="42dp"
+            android:layout_height="wrap_content" android:textColor="#FF1F71FF" android:textSize="11sp" />
+        <TextView android:id="@+id/row_name_2" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:maxLines="1" android:ellipsize="end"
+            android:textColor="#FF14161B" android:textSize="12sp" />
+        <TextView android:id="@+id/row_room_2" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:maxLines="1" android:ellipsize="end"
+            android:textColor="#99000000" android:textSize="10sp" />
+    </LinearLayout>
+
+    <!-- 行 3 -->
+    <LinearLayout android:id="@+id/widget_row3"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:paddingTop="3dp" android:paddingBottom="3dp">
+        <TextView android:id="@+id/row_time_3" android:layout_width="42dp"
+            android:layout_height="wrap_content" android:textColor="#FF1F71FF" android:textSize="11sp" />
+        <TextView android:id="@+id/row_name_3" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:maxLines="1" android:ellipsize="end"
+            android:textColor="#FF14161B" android:textSize="12sp" />
+        <TextView android:id="@+id/row_room_3" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:maxLines="1" android:ellipsize="end"
+            android:textColor="#99000000" android:textSize="10sp" />
+    </LinearLayout>
+
+    <!-- 行 4 -->
+    <LinearLayout android:id="@+id/widget_row4"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:paddingTop="3dp" android:paddingBottom="3dp">
+        <TextView android:id="@+id/row_time_4" android:layout_width="42dp"
+            android:layout_height="wrap_content" android:textColor="#FF1F71FF" android:textSize="11sp" />
+        <TextView android:id="@+id/row_name_4" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:maxLines="1" android:ellipsize="end"
+            android:textColor="#FF14161B" android:textSize="12sp" />
+        <TextView android:id="@+id/row_room_4" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:maxLines="1" android:ellipsize="end"
+            android:textColor="#99000000" android:textSize="10sp" />
+    </LinearLayout>
+
+    <!-- 行 5 -->
+    <LinearLayout android:id="@+id/widget_row5"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:paddingTop="3dp" android:paddingBottom="3dp">
+        <TextView android:id="@+id/row_time_5" android:layout_width="42dp"
+            android:layout_height="wrap_content" android:textColor="#FF1F71FF" android:textSize="11sp" />
+        <TextView android:id="@+id/row_name_5" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:maxLines="1" android:ellipsize="end"
+            android:textColor="#FF14161B" android:textSize="12sp" />
+        <TextView android:id="@+id/row_room_5" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:maxLines="1" android:ellipsize="end"
+            android:textColor="#99000000" android:textSize="10sp" />
+    </LinearLayout>
+
+    <!-- 行 6 -->
+    <LinearLayout android:id="@+id/widget_row6"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:paddingTop="3dp" android:paddingBottom="3dp">
+        <TextView android:id="@+id/row_time_6" android:layout_width="42dp"
+            android:layout_height="wrap_content" android:textColor="#FF1F71FF" android:textSize="11sp" />
+        <TextView android:id="@+id/row_name_6" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:maxLines="1" android:ellipsize="end"
+            android:textColor="#FF14161B" android:textSize="12sp" />
+        <TextView android:id="@+id/row_room_6" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:maxLines="1" android:ellipsize="end"
+            android:textColor="#99000000" android:textSize="10sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/widget_next"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textColor="#FF1F71FF"
+        android:textSize="11sp"
+        android:visibility="gone" />
+</LinearLayout>
