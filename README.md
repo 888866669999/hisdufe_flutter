@@ -193,8 +193,12 @@ android/app/src/main/
    `onnxruntime` 插件只打包 ARM（arm64-v8a / armeabi-v7a），
    模拟器是 x86_64，验证码识别会**直接抛「找不到库」而识别率为 0**。
    本仓库已把微软官方 AAR 里的 x86_64 `.so` 放到
-   `android/app/src/main/jniLibs/x86_64/`，开箱即用；
+   `android/app/src/debug/jniLibs/x86_64/`，开箱即用；
    若升级插件版本，需重新取一次（见第七节的排查记录）。
+
+   注意是 **`src/debug/`** 而不是 `src/main/`：模拟器只用于调试，
+   而这份库有 38 MB —— 放 `main` 会把它一并打进 release 包，
+   白白增加发布体积（真机是 arm64，用不到 x86_64 这份）。
 
    同类教训在 PDF 上**直接绕开了**：这一版不再内嵌预览 PDF，
    改为只提供下载（见下）—— 连 PDF 渲染库都不引，也就不存在 ABI 覆盖问题。
@@ -279,7 +283,8 @@ Failed to load dynamic library 'libonnxruntime.so': dlopen failed: library "libo
 真机（arm64）不受影响，所以这个问题只在模拟器上暴露。
 
 修法：从微软官方 `onnxruntime-android` AAR 里取出 x86_64 的
-`libonnxruntime.so`，放到 `android/app/src/main/jniLibs/x86_64/`。
+`libonnxruntime.so`，放到 `android/app/src/debug/jniLibs/x86_64/`
+（`debug` 而非 `main`，理由见第五节）。
 插件请求的是 ONNX Runtime 的 C API v14，而官方 `.so` 向下兼容提供旧版本
 API，因此可以直接替换；该 `.so` 只依赖系统库，不需要额外捆绑 C++ 运行时。
 
