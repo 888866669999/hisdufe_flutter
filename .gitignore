@@ -66,3 +66,18 @@ flutter_*.log
 # 本地仍保留在 tools/ocr_eval/，`flutter test` 会用它校验预处理尺寸
 # （见 test/captcha_pipeline_test.dart：目录不存在时自动跳过）。
 /tools/ocr_eval/
+
+# ===== 构建产物：打进仓库会让 clone 变成几百 MB（不进库）=====
+#
+# `release/` 是本地整理好的发布包（三个 ABI 加起来约 165 MB）。
+# 二进制不该进版本库，理由很实际：
+#   1. clone 体积 —— 每次历史都带着这几百 MB，且**永久留存在历史里**，
+#      即使以后删掉文件也瘦不回来；
+#   2. GitHub 单文件上限 100 MB，`all` 版 88 MB 已经很接近，
+#      下一次功能更新就可能超限；
+#   3. 发布包的正确去处是 Releases 页（附件不占仓库体积）。
+#
+# 需要包时本地执行：
+#   flutter build apk --release --split-per-abi && flutter build apk --release
+/release/
+**/*.apk
