@@ -12,15 +12,14 @@
 
 | 模块 | 状态 | 说明 |
 |---|---|---|
-| 课表 | 完成 | **整周固定一屏**（7 天 × 5 节同时可见，无滚动）；按账号本地缓存，**支持本地增删改**（空白格可点）；单双周/周次过滤 |
+| 课表 | 完成 | 按账号本地缓存，**支持本地增删改**；单双周/周次过滤 |
 | 成绩 | 完成 | 学期筛选 + 搜索 + 客户端汇总（总学分/加权绩点） |
-| 培养方案 | 完成 | 课程设置总表（分组可折叠）+ **PDF 附件下载**（走系统「另存为」，文件落到用户选的位置） |
+| 培养方案 | 完成 | 课程设置总表+ **PDF 附件下载**
 | 通选课修读情况 | 完成 | **大类 → 具体课程**（可折叠，默认收起）；类别进度 |
 | 空教室查询 | 完成 | 全自动查询；客户端做周次过滤 |
 | 个人信息 | 完成 | 学籍卡片分组展示 |
 | 桌面卡片 | 完成 | Android App Widget，课表改动**自动同步** |
-| 动态玻璃 UI | 完成 | 全应用铺开：`GlassScaffold`/`GlassTabBar`/`GlassAppBar`、所有卡片列表（成绩/培养/通选/空教室/设置）、全部下拉选择器、弹窗与输入框 |
-| 上课提醒 | 完成 | 本地通知，系统托管，应用关闭仍触发 |
+| 上课提醒 | 完成 | 本地通知，系统托管 |
 | 校历与作息表 | 完成 | **从学校官网获取**官方校历图 + 作息时刻表；离线用缓存/内置数据 |
 
 ---
@@ -30,30 +29,30 @@
 
 ```
 lib/
-├── main.dart                     入口；生命周期钩子（退后台落盘会话+卡片）
+├── main.dart                     入口；生命周期钩子
 ├── common/                       constants / result(AppError) / week_calc
-├── crypto/qz_encoder.dart        登录加密（scode#sxh 算法）
+├── crypto/qz_encoder.dart        登录加密
 ├── network/                      cookie_jar / http_client / qz_api
-├── parser/                       html_lite + 8 个页面解析器（含校历页）
+├── parser/                       html_lite + 8 个页面解析器
 ├── model/                        models / classroom_models / reminder_plan / captcha_charset
-│                                 card_layout（卡片尺寸规划：真实文本度量 + 逐级降级）
+│                                 card_layout
 ├── data/                         pref_store / credential_store / timetable_store
 │                                 app_state / week_service / section_time_store
 │                                 reminder_service / card_snapshot_store
 │                                 captcha_model / re_auth_service
-│                                 academic_calendar（内置官方数据）
-│                                 campus_calendar_service（联网抓官网 + 缓存）
-│                                 pdf_store（附件下载与缓存）
-├── theme/theme.dart              设计令牌
-├── theme/glass_kit.dart          玻璃外观集中定义（只用 AdaptiveGlass）
+│                                 academic_calendar
+│                                 campus_calendar_service
+│                                 pdf_store
+├── theme/theme.dart              
+├── theme/glass_kit.dart          玻璃外观集中定义
 ├── widgets/                      state_views / course_editor / reauth_dialog
 │                                 credentials_box / pdf_preview / calendar_sheet
 └── pages/                        shell + login/schedule/score/plan/elective/
                                   classroom/profile/settings
 android/app/src/main/
-├── AndroidManifest.xml                        权限 + 明文流量 + widget 注册
-├── kotlin/.../TodayCourseWidgetProvider.kt    桌面卡片
-└── res/layout/today_course_widget.xml         卡片布局
+├── AndroidManifest.xml                       
+├── kotlin/.../TodayCourseWidgetProvider.kt    
+└── res/layout/today_course_widget.xml         
 ```
 
 ---
