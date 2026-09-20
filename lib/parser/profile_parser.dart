@@ -38,6 +38,38 @@ class ProfileParser {
     '婚否',
   ];
 
+  /// **不展示、也不缓存**的字段。
+  ///
+  /// ===== 为什么要有这个名单 =====
+  /// 学籍卡片原文里含**身份证号**、入学考号、证书号这类高敏感信息，
+  /// 而本应用把「整页原文」落盘做离线缓存 —— 若不拦掉，
+  /// 身份证号就会以明文躺在应用私有目录里（虽然沙箱隔离，但没有必要承担
+  /// 这个风险：这些字段与本应用的任何功能都无关）。
+  ///
+  /// 拦在**解析层**而不是界面层，是为了让缓存也拿不到它们：
+  /// 缓存存的是原文、展示的是解析结果，只有在这里丢掉才两边都干净。
+  ///
+  /// 用关键词匹配而不是精确标签名：服务端这类字段的措辞不统一
+  /// （实测见过「身份证编号」，别处可能叫「身份证号」「证件号码」）。
+  static const List<String> _sensitiveKeywords = <String>[
+    '身份证',
+    '证件号',
+    '入学考号',
+    '证书号',
+    '考生号',
+    '银行卡',
+  ];
+
+  /// 该字段是否属于敏感信息（命中任一关键词）
+  static bool _isSensitive(String label) {
+    for (final String k in _sensitiveKeywords) {
+      if (label.contains(k)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   static StudentProfile parse(String html) {
     final StudentProfile p = StudentProfile();
     final HtmlTable? table = HtmlLite.findTableById(html, 'xjkpTable');
@@ -106,10 +138,16 @@ class ProfileParser {
       }
     }
 
-    // 分组：基本信息 + 其他信息
+    // 分组：基本信息 + 其他信息。
+    // 敏感字段在这里被丢弃（见 _sensitiveKeywords 的说明）——
+    // 位置刻意放在「提取姓名/学号之后、分组之前」：
+    // 万一将来把类别名加进黑名单，也不会影响姓名学号的提取。
     final List<ProfileField> basic = <ProfileField>[];
     final List<ProfileField> others = <ProfileField>[];
     for (final ProfileField f in dedup) {
+      if (_isSensitive(f.label)) {
+        continue;
+      }
       if (_basicKeys.contains(f.label)) {
         basic.add(f);
       } else {

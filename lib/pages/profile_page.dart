@@ -6,6 +6,14 @@
 /// 圆形。默认显示**应用图标**（`assets/logo.png`，与桌面图标同一份源图）；
 /// 用户可以从相册选图、在应用内裁切后替换（见 [AvatarStore] 与
 /// [AvatarCropDialog]）。裁切与存储都在本地完成，不上传任何图片。
+///
+/// ===== 页面结构：头部恒在，只有数据区降级 =====
+/// 本页是**窄屏下进入设置的唯一入口**（齿轮按钮在头部卡片右端）。
+/// 早期版本把整个页面写成「加载态 / 错误态 / 成功态」三选一，
+/// 于是离线时头部连齿轮一起消失 —— 用户既看不到自己的信息，
+/// **也再没有路径打开设置页**（设置本身不联网，本可以正常使用）。
+/// 现在改为：头部（头像 + 姓名 + 齿轮）永远渲染，
+/// 只有它下面的资料区在「加载中 / 出错 / 有数据」之间切换。
 library;
 
 import 'dart:io';
@@ -14,12 +22,16 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../common/constants.dart';
 import '../data/app_state.dart';
 import '../data/avatar_store.dart';
+import '../data/page_cache.dart';
 import '../data/re_auth_service.dart';
 import '../model/models.dart';
+import '../parser/profile_parser.dart';
 import '../theme/glass_kit.dart';
 import '../theme/theme.dart';
+import '../widgets/app_refresh.dart';
 import '../widgets/avatar_crop_dialog.dart';
 import '../widgets/state_views.dart';
 import '../widgets/top_fade_blur.dart';
@@ -52,6 +64,9 @@ class _ProfilePageState extends State<ProfilePage> {
   void initState() {
     super.initState();
     _loadAvatar();
+    // 先用内存缓存填满首帧，再交给 _load 决定要不要联网。
+    // 这样切页回来（缓存还在内存里）不会闪一下加载态。
+    _profile = _loader().peek();
     _load();
   }
 
@@ -182,31 +197,26 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-  Future<void> _load({bool interactive = false}) async {
+  Future<void> _load({bool interactive = false, bool force = false}) async {
     // 用户点导航进来的首次加载同样算「主动操作」：
     // 否则会话失效时只会给一句内联提示，逼迫用户再点一次「重试」。
     // 标记是一次性的（取走即清零），冷启动不受影响。
     interactive = interactive || ReAuthService.consumeUserIntent();
+    // 已有内容时不显示整屏加载态：切页回来应该立刻看到旧资料，
+    // 新数据到了再替换（否则每次切页都闪一下「正在获取个人信息…」）。
     setState(() {
-      _loading = true;
       _error = '';
+      if (_profile == null) {
+        _loading = true;
+      }
     });
     try {
-      final StudentProfile p = await AppState.instance.api.getProfile();
+      final PageLoadResult<StudentProfile> r = await _loader().load(force: force);
       if (!mounted) {
         return;
       }
-      // 顺手把姓名写进全局状态（顶部会显示）
-      if (p.name.isNotEmpty) {
-        AppState.instance.studentName = p.name;
-      }
-      if (p.studentId.isNotEmpty) {
-        AppState.instance.studentId = p.studentId;
-      }
-      setState(() {
-        _profile = p;
-        _loading = false;
-      });
+      _applyProfile(r.data);
+      setState(() => _loading = false);
     } catch (e) {
       if (!mounted) {
         return;
@@ -216,74 +226,152 @@ class _ProfilePageState extends State<ProfilePage> {
       final bool renewed = await ReAuthService.handlePageError(e, (String msg) {
         setState(() {
           _loading = false;
+          // 已有缓存内容时不清空 _profile：让用户继续看到旧资料，
+          // 只在顶部提示这次刷新失败了
           _error = msg;
         });
       }, interactive: interactive);
       if (renewed && mounted) {
-        await _load();
+        await _load(force: force);
       }
     }
   }
 
+  /// 缓存 key 随账号变化，所以每次现取 —— 不能缓存在字段里：
+  /// 登出再登录（换账号）时页面可能不重建，字段会留下上一个账号的 key，
+  /// 后果是 B 读到 A 的缓存。
+  PageDataLoader<StudentProfile> _loader() => PageDataLoader<StudentProfile>(
+        key: PageCache.keyOf(AppState.instance.account, kCacheProfile),
+        fetch: AppState.instance.api.getProfileHtml,
+        parse: ProfileParser.parse,
+        ttl: kTtlProfile,
+      );
+
+  /// 把解析结果落进页面状态，并顺手同步姓名/学号到全局（顶部会显示）
+  void _applyProfile(StudentProfile p) {
+    if (p.name.isNotEmpty) {
+      AppState.instance.studentName = p.name;
+    }
+    if (p.studentId.isNotEmpty) {
+      AppState.instance.studentId = p.studentId;
+    }
+    _profile = p;
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const LoadingView(message: '正在获取个人信息…');
-    }
-    final StudentProfile? p = _profile;
-    if (p == null || p.sections.isEmpty) {
-      return ErrorView(
-          message: _error.isEmpty ? '暂无个人信息' : _error, onRetry: () => _load(interactive: true));
-    }
+    // ===== 头部恒在 =====
+    // 齿轮是窄屏下唯一的设置入口，任何「整页替换」的加载/错误态都会把它
+    // 一起替换掉，于是离线时设置页变得不可达（而设置页本身不联网）。
+    // 结构固定为：头部 + 「资料区的三态」，头部不参与状态切换。
     return Stack(
       children: <Widget>[
-        Positioned.fill(child: _buildList(p)),
+        Positioned.fill(
+          child: AppRefresh(
+            onRefresh: () => _load(force: true),
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: EdgeInsets.fromLTRB(Gaps.page, appBarInset(context) + Gaps.page,
+                  Gaps.page, Gaps.page + Gaps.scrollTail),
+              children: <Widget>[
+                if (_actionHint.isNotEmpty) ...<Widget>[
+                  _actionHintBanner(),
+                  const SizedBox(height: Gaps.m),
+                ],
+                // 刷新失败但还有旧数据时的提示（比整屏报错温和得多）
+                if (_error.isNotEmpty && _profile != null) ...<Widget>[
+                  _staleBanner(),
+                  const SizedBox(height: Gaps.m),
+                ],
+                _header(),
+                const SizedBox(height: Gaps.m),
+                ..._body(),
+              ],
+            ),
+          ),
+        ),
         const TopFadeBlur(),
       ],
     );
   }
 
-  Widget _buildList(StudentProfile p) {
-    return ListView(
-      // 顶部让位放进**滚动内容**（不是视口），内容因此会从顶栏下经过、
-      // 被上面的 TopFadeBlur 糊掉；外壳已对 profile 跳过它自己的让位
-      // （见 shell.dart 的 pageHandlesTopInset）。
-      //
-      // 底部额外留出玻璃导航栏的高度：extendBody 后内容会滚到 dock 下面，
-      // 不留这段空白最后一项会被玻璃压住
-      padding: EdgeInsets.fromLTRB(Gaps.page, appBarInset(context) + Gaps.page,
-          Gaps.page, Gaps.page + Gaps.scrollTail),
-      children: <Widget>[
-        // 操作类提示（如换头像失败）：可点掉，不遮挡已有内容
-        if (_actionHint.isNotEmpty) ...<Widget>[
-          GestureDetector(
-            onTap: () => setState(() => _actionHint = ''),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: context.dangerColor.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(Gaps.radiusSm),
-              ),
-              child: Text(_actionHint,
-                  style: TextStyle(fontSize: 12, color: context.dangerColor)),
-            ),
-          ),
-          const SizedBox(height: Gaps.m),
-        ],
-        _header(p),
-        const SizedBox(height: Gaps.m),
+  /// 资料区的四种情况：首屏加载 / 无数据且出错 / 无数据 / 有数据
+  List<Widget> _body() {
+    final StudentProfile? p = _profile;
+    if (p != null && p.sections.isNotEmpty) {
+      return <Widget>[
         for (final ProfileSection s in p.sections) ...<Widget>[
           GroupTitle(s.title),
           GroupBox(
             children: <Widget>[
-              for (final ProfileField f in s.fields)
-                _fieldRow(f, s.fields.last == f),
+              for (final ProfileField f in s.fields) _fieldRow(f, s.fields.last == f),
             ],
           ),
           const SizedBox(height: Gaps.m),
         ],
-      ],
+      ];
+    }
+    if (_loading) {
+      return const <Widget>[
+        Padding(
+          padding: EdgeInsets.symmetric(vertical: 48),
+          child: LoadingView(message: '正在获取个人信息…'),
+        ),
+      ];
+    }
+    // 没有数据（从未取到，或缓存被清）：给可重试的错误块。
+    // 注意这**只是列表里的一项**，头部与齿轮仍在上面 —— 这正是本次修复的要点。
+    return <Widget>[
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 32),
+        child: Column(
+          children: <Widget>[
+            Text(
+              _error.isEmpty ? '暂无个人信息' : _error,
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: context.textSecondary),
+            ),
+            const SizedBox(height: Gaps.m),
+            FilledButton(
+              onPressed: () => _load(interactive: true, force: true),
+              child: const Text('重试'),
+            ),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  /// 操作类提示条（可点掉，不遮挡已有内容）
+  Widget _actionHintBanner() {
+    return GestureDetector(
+      onTap: () => setState(() => _actionHint = ''),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: context.dangerColor.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(Gaps.radiusSm),
+        ),
+        child: Text(_actionHint,
+            style: TextStyle(fontSize: 12, color: context.dangerColor)),
+      ),
+    );
+  }
+
+  /// 「刷新失败，以下是缓存内容」提示条
+  Widget _staleBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: context.warningColor.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(Gaps.radiusSm),
+      ),
+      child: Text(
+        _error,
+        style: TextStyle(fontSize: 12, color: context.textSecondary),
+      ),
     );
   }
 
@@ -377,7 +465,17 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  Widget _header(StudentProfile p) {
+  /// 头部卡片：头像 + 姓名 + 设置入口。
+  ///
+  /// **不依赖 [_profile]**：姓名/学号在没取到资料时退回全局状态里的值
+  /// （登录时写入，见 AppState.studentName），仍然取不到就显示占位文案。
+  /// 这样离线、首次安装等拿不到资料的情况下，头部与齿轮依旧可用。
+  Widget _header() {
+    final StudentProfile? p = _profile;
+    final String name =
+        (p?.name.isNotEmpty ?? false) ? p!.name : AppState.instance.studentName;
+    final String sid =
+        (p?.studentId.isNotEmpty ?? false) ? p!.studentId : AppState.instance.studentId;
     return SectionCard(
       child: Row(
         children: <Widget>[
@@ -388,16 +486,16 @@ class _ProfilePageState extends State<ProfilePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
-                  p.name.isNotEmpty ? p.name : '未获取到姓名',
+                  name.isNotEmpty ? name : '未获取到姓名',
                   style: TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.w600,
                     color: context.textPrimary,
                   ),
                 ),
-                if (p.studentId.isNotEmpty) ...<Widget>[
+                if (sid.isNotEmpty) ...<Widget>[
                   const SizedBox(height: 3),
-                  Text('学号 ${p.studentId}',
+                  Text('学号 $sid',
                       style: TextStyle(
                           fontSize: 12, color: context.textTertiary)),
                 ],

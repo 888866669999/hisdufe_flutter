@@ -4,7 +4,7 @@ import 'package:hisdufe_jw/model/captcha_charset.dart';
 void main() {
   test('字符表与所用模型（common_old / CHARSET_OLD）配套', () {
     // 这组索引是**真机跑模型时打印出来的原始 argmax 结果**
-    // （语料 4r36，日志见 README）。用它们做断言，等价于锁住
+    // （语料 4r36，日志见 docs/技术笔记.md）。用它们做断言，等价于锁住
     // 「模型输出 → 字符」这条链路，而不只是抽查几个数字。
     //
     // 为什么必须这样测：CHARSET_OLD 与 CHARSET_BETA 都是 8210 类、

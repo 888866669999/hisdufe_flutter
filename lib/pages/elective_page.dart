@@ -14,12 +14,16 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../common/constants.dart';
 import '../data/app_state.dart';
 import '../data/elective_requirement_store.dart';
+import '../data/page_cache.dart';
 import '../data/re_auth_service.dart';
 import '../model/models.dart';
+import '../parser/elective_parser.dart';
 import '../theme/glass_kit.dart';
 import '../theme/theme.dart';
+import '../widgets/app_refresh.dart';
 import '../widgets/requirement_editor_dialog.dart';
 import '../widgets/state_views.dart';
 import '../widgets/top_fade_blur.dart';
@@ -54,30 +58,51 @@ class _ElectivePageState extends State<ElectivePage> {
   @override
   void initState() {
     super.initState();
+    // 先用内存缓存填首帧（归并 + 叠加自录要求一并做完），
+    // 再决定要不要联网 —— 切页回来不会闪加载态。
+    final ElectiveReport? cached = _loader().peek();
+    if (cached != null) {
+      _applyCached(cached);
+    }
     _load();
   }
 
-  Future<void> _load({bool interactive = false}) async {
+  PageDataLoader<ElectiveReport> _loader() => PageDataLoader<ElectiveReport>(
+        key: PageCache.keyOf(AppState.instance.account, kCacheElective),
+        fetch: AppState.instance.api.getElectiveHtml,
+        parse: ElectiveParser.parse,
+        ttl: kTtlElective,
+      );
+
+  /// 归并 + 叠加用户自录要求，写进页面状态。
+  ///
+  /// 两件事分开做：`grouped()` 是纯计算（可单测），读本地配置是 IO ——
+  /// 混在一起那个纯函数就不纯了。
+  void _applyCached(ElectiveReport r) {
+    final List<ElectiveGroup> groups = r.grouped();
+    _applyCustomRequirements(groups);
+    _report = r;
+    _groups = groups;
+  }
+
+  Future<void> _load({bool interactive = false, bool force = false}) async {
     // 用户点导航进来的首次加载同样算「主动操作」：
     // 否则会话失效时只会给一句内联提示，逼迫用户再点一次「重试」。
     // 标记是一次性的（取走即清零），冷启动不受影响。
     interactive = interactive || ReAuthService.consumeUserIntent();
     setState(() {
-      _loading = true;
       _error = '';
+      if (_report == null) {
+        _loading = true;
+      }
     });
     try {
-      final ElectiveReport r = await AppState.instance.api.getElectiveReport();
+      final PageLoadResult<ElectiveReport> res = await _loader().load(force: force);
       if (!mounted) {
         return;
       }
-      // 归并 + 叠加用户自录的要求学分。两件事分开做：
-      // grouped() 是纯计算（可单测），读本地配置是 IO —— 混在一起那个纯函数就不纯了。
-      final List<ElectiveGroup> groups = r.grouped();
-      _applyCustomRequirements(groups);
       setState(() {
-        _report = r;
-        _groups = groups;
+        _applyCached(res.data);
         _loading = false;
       });
     } catch (e) {
@@ -93,7 +118,7 @@ class _ElectivePageState extends State<ElectivePage> {
         });
       }, interactive: interactive);
       if (renewed && mounted) {
-        await _load();
+        await _load(force: force);
       }
     }
   }
@@ -187,31 +212,48 @@ class _ElectivePageState extends State<ElectivePage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const LoadingView(message: '正在获取通选课修读情况…');
-    }
     final ElectiveReport? r = _report;
+    // 有缓存内容就直接渲染，刷新失败只在列表顶部提示 ——
+    // 用户已经看到的数据不该因为一次刷新失败就消失。
+    if (r != null && !(r.categories.isEmpty && r.courses.isEmpty)) {
+      // 用 _load 里算好的那份（用户改过要求后要能就地更新，见 _editRequirement）
+      final List<ElectiveGroup> groups = _groups;
+      // 顶部渐变模糊：与培养方案页同一处理（详见 TopFadeBlur 的说明）
+      return Stack(
+        children: <Widget>[
+          Positioned.fill(
+            child: AppRefresh(
+              onRefresh: () => _load(force: true),
+              child: _buildList(r, groups),
+            ),
+          ),
+          const TopFadeBlur(),
+        ],
+      );
+    }
+    if (_loading) {
+      return const RefreshableFill(child: LoadingView(message: '正在获取通选课修读情况…'));
+    }
     if (r == null) {
-      return ErrorView(
-          message: _error.isEmpty ? '暂无通选课数据' : _error, onRetry: () => _load(interactive: true));
+      return AppRefresh(
+        onRefresh: () => _load(force: true),
+        child: RefreshableFill(
+          child: ErrorView(
+              message: _error.isEmpty ? '暂无通选课数据' : _error,
+              onRetry: () => _load(interactive: true, force: true)),
+        ),
+      );
     }
-    if (r.categories.isEmpty && r.courses.isEmpty) {
-      return const EmptyView(title: '暂无通选课数据');
-    }
-
-    // 用 _load 里算好的那份（用户改过要求后要能就地更新，见 _editRequirement）
-    final List<ElectiveGroup> groups = _groups;
-    // 顶部渐变模糊：与培养方案页同一处理（详见 TopFadeBlur 的说明）
-    return Stack(
-      children: <Widget>[
-        Positioned.fill(child: _buildList(r, groups)),
-        const TopFadeBlur(),
-      ],
+    return AppRefresh(
+      onRefresh: () => _load(force: true),
+      child: const RefreshableFill(child: EmptyView(title: '暂无通选课数据')),
     );
   }
 
   Widget _buildList(ElectiveReport r, List<ElectiveGroup> groups) {
     return ListView(
+      // 内容不满一屏也要能下拉刷新
+      physics: const AlwaysScrollableScrollPhysics(),
       // 底部额外留出玻璃导航栏的高度：extendBody 后内容会滚到 dock 下面，
       // 不留这段空白最后一项会被玻璃压住
       // 顶部让位放在**滚动内容**里（不是视口上），因此首项仍从顶栏下
@@ -237,6 +279,20 @@ class _ElectivePageState extends State<ElectivePage> {
               child: Text(_error2,
                   style: TextStyle(fontSize: 12, color: context.brandColor)),
             ),
+          ),
+          const SizedBox(height: Gaps.m),
+        ],
+        // 有缓存内容但这次刷新失败：提示一下，但**不**清掉内容
+        if (_error.isNotEmpty) ...<Widget>[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: context.warningColor.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(_error,
+                style: TextStyle(fontSize: 12, color: context.textSecondary)),
           ),
           const SizedBox(height: Gaps.m),
         ],

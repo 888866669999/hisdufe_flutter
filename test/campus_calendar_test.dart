@@ -115,7 +115,7 @@ void main() {
     final List<String> lines = CampusCalendarService.parseSectionLines(_fixture());
     final List<List<String>> rows = CampusCalendarService.mapToGridRows(lines)!;
     // 与 kOfficialSections 逐行比对：若有一天官网改了时间，这条会失败，
-    // 提醒我们需要同步更新内置兜底值与 README。
+    // 提醒我们需要同步更新内置兜底值与 docs/技术笔记.md。
     const List<List<String>> expected = <List<String>>[
       <String>['08:30', '10:00'],
       <String>['10:20', '11:50'],

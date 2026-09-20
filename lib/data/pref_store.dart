@@ -119,6 +119,13 @@ class PrefStore {
 
   static Future<void> saveWeekAlignAt(int ms) => putInt(kKeyWeekAlignAt, ms);
 
+  /// 「系统时间已超出周历」的自动拉取：读上次试过的日期（`yyyy-MM-dd`）
+  static String loadSemesterAutoFetchDay() =>
+      getText(kKeySemesterAutoFetchDay);
+
+  static Future<void> saveSemesterAutoFetchDay(String day) =>
+      putText(kKeySemesterAutoFetchDay, day);
+
   static int loadWeekAlignValue() => getInt(kKeyWeekAlignValue);
 
   static Future<void> saveWeekAlignValue(int week) =>

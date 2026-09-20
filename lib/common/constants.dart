@@ -1,7 +1,7 @@
 /// 全局常量：域名、接口路径、断点、节次与作息
 ///
 /// 从鸿蒙版 `common/Constants.ets` 移植。所有取值都经过真实抓包核对，
-/// 改动前请先看 README 的「已核实的接口清单」。
+/// 改动前请先看 docs/技术笔记.md 的「接口与字段」。
 library;
 
 /// 教务系统基地址。
@@ -51,7 +51,7 @@ const int kMaxWeeks = 30;
 /// 开源仓库地址（设置页「关于」组里展示，点按用系统浏览器打开）。
 ///
 /// 只放**本端**（Flutter/Android）仓库：用户装的哪个端，想看的通常就是哪个端的源码。
-/// 另一端的地址写在 README 里，需要的人自然找得到。
+/// 鸿蒙版未开源，所以没有第二处地址可指。
 const String kRepoUrl = 'https://github.com/888866669999/hisdufe_flutter';
 
 /// 响应式断点（逻辑像素）。与鸿蒙版保持同一组数值，
@@ -160,7 +160,11 @@ const String kKeySurfaceStyle = 'surface_style';
 /// 见 data/elective_requirement_store.dart。按账号分片存储。
 const String kKeyElectiveRequired = 'elective_required';
 
-/// 官网校历缓存（抓取成功才写；离线时读这里，再退回内置数据）
+/// 学校官网「作息表 + 校历图」的缓存（抓取成功才写；离线时读这里）。
+///
+/// 作息表抓不到时退回 [kOfficialSections]（内置的时刻表）。
+/// 校历图不再有内置兜底 —— 那东西一年一换，内置版换学年后会静默过期，
+/// 界面上看不出来。见 data/semester_calendar_service.dart。
 const String kKeyCampusSections = 'campus_sections';
 const String kKeyCampusImages = 'campus_images';
 const String kKeyCampusImageUrls = 'campus_image_urls';
@@ -168,5 +172,57 @@ const String kKeyCampusUpdated = 'campus_updated';
 const String kKeyCampusFetchedAt = 'campus_fetched_at';
 
 
+/// 上次「因系统时间已超出周历而自动拉取」的日期（`yyyy-MM-dd`）。
+///
+/// 用于把这种自动拉取限制为**每天一次**：触发条件（今天晚于周历最后一周）
+/// 在放假期间持续成立，不限制就会每次启动/每次打开校历都联网。
+const String kKeySemesterAutoFetchDay = 'semester_auto_fetch_day';
+
 /// 周次与系统时间对齐的最小间隔（6 小时）
 const Duration kWeekAlignInterval = Duration(hours: 6);
+
+// ==================== 页面缓存 ====================
+//
+// 见 data/page_cache.dart。这里只放「缓存标识」与「新鲜期」。
+// 集中定义的原因：这些值需要能一眼横向对比 —— 哪个页面缓存久、哪个短；
+// 散在各页面里就只能一个个翻着看。
+
+/// 缓存标识：页面名（参与缓存 key，不要随意改名，否则旧缓存会失配）
+const String kCacheScoreList = 'score_list';
+const String kCacheScoreSemesters = 'score_semesters';
+const String kCachePlan = 'plan';
+const String kCacheElective = 'elective';
+const String kCacheProfile = 'profile';
+const String kCacheClassroomOptions = 'classroom_options';
+const String kCacheClassroomBuildings = 'classroom_buildings';
+const String kCacheClassroomUsage = 'classroom_usage';
+const String kCacheSemesterCalendar = 'semester_calendar';
+const String kCacheSemesterList = 'semester_list';
+
+/// 页面缓存的新鲜期（TTL）。
+///
+/// ===== 这些值是怎么定的 =====
+/// 判据是「数据多久可能变一次」与「重复请求的代价」两者取平衡：
+///   - **成绩 2 分钟**：出分时段学生会反复进来刷。2 分钟内连着切 tab
+///     明显是同一件事的重复操作，没必要每次都打服务器；
+///     超过 2 分钟又确实可能出新成绩，所以不能更长。
+///   - **通选 10 分钟**：修读进度变动不频繁（一学期就那几门课）。
+///   - **培养方案 / 个人信息 6 小时**：一学年才可能调整一次，
+///     同一天内反复请求纯属浪费。培养方案页面还最大（70KB），
+///     省下的流量最可观。
+///   - **空教室**：选项（校区/学期/教学楼）是静态配置，给 6 小时；
+///     查询结果反映「此刻哪间教室空着」，按节次变化，只给 2 分钟
+///     且**仅做内存缓存**（见 classroom_page 的说明）。
+///
+/// 宁可偏保守（短）：实机观察后可调，而调长的风险只是多几次请求，
+/// 调太长才会让用户看到过期数据。
+const Duration kTtlScoreList = Duration(minutes: 2);
+const Duration kTtlScoreSemesters = Duration(hours: 6);
+const Duration kTtlElective = Duration(minutes: 10);
+const Duration kTtlPlan = Duration(hours: 6);
+const Duration kTtlProfile = Duration(hours: 6);
+const Duration kTtlClassroomOptions = Duration(hours: 6);
+const Duration kTtlClassroomBuildings = Duration(hours: 6);
+const Duration kTtlClassroomUsage = Duration(minutes: 2);
+const Duration kTtlSemesterCalendar = Duration(hours: 6);
+const Duration kTtlSemesterList = Duration(hours: 6);

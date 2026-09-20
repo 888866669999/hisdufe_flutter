@@ -18,6 +18,7 @@ import '../network/cookie_jar.dart';
 import '../network/qz_api.dart';
 import 'credential_store.dart';
 import 'elective_requirement_store.dart';
+import 'page_cache.dart';
 import 'reminder_service.dart';
 import 'card_snapshot_store.dart';
 import 'pref_store.dart';
@@ -231,6 +232,12 @@ class AppState extends ChangeNotifier {
     AccountScopeHooks.runAll();
     // 2) 内存缓存
     timetable = null;
+    // 2b) 页面缓存（成绩/培养方案/通选/个人信息/空教室原文）。
+    //     **必须清**：缓存内容是上一个账号的数据。磁盘层按账号前缀分文件，
+    //     不清就长期留在设备上；内存层更直接 —— 同一次进程内换个账号登录，
+    //     新的 key 碰不到旧条目，但旧数据仍在内存里（且如果账号串恰好相同，
+    //     还会被直接命中）。必须在下面 clearAccountScoped 清掉账号之前调用。
+    await PageCache.clearAccount(account);
     // 3) 通选课要求学分是按**专业**录的，同机换账号（不同专业）要求不同，
     //    留着会让 B 以 A 的要求判断达标。
     //    必须在 clearAccount() 之前取账号 —— 它下面就会被清掉。

@@ -22,13 +22,17 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../common/constants.dart';
 import '../data/app_state.dart';
+import '../data/page_cache.dart';
 import '../data/pdf_saver.dart';
 import '../data/pdf_store.dart';
 import '../data/re_auth_service.dart';
 import '../model/models.dart';
+import '../parser/plan_parser.dart';
 import '../theme/glass_kit.dart';
 import '../theme/theme.dart';
+import '../widgets/app_refresh.dart';
 import '../widgets/state_views.dart';
 import '../widgets/top_fade_blur.dart';
 
@@ -68,25 +72,37 @@ class _PlanPageState extends State<PlanPage> {
   @override
   void initState() {
     super.initState();
+    // 先用内存缓存填首帧，再决定要不要联网（避免切页回来闪加载态）
+    _detail = _loader().peek();
     _load();
   }
 
-  Future<void> _load({bool interactive = false}) async {
+  PageDataLoader<PlanDetail> _loader() => PageDataLoader<PlanDetail>(
+        key: PageCache.keyOf(AppState.instance.account, kCachePlan),
+        fetch: _app.api.getPlanHtml,
+        parse: PlanParser.parse,
+        ttl: kTtlPlan,
+      );
+
+  Future<void> _load({bool interactive = false, bool force = false}) async {
     // 用户点导航进来的首次加载同样算「主动操作」：
     // 否则会话失效时只会给一句内联提示，逼迫用户再点一次「重试」。
     // 标记是一次性的（取走即清零），冷启动不受影响。
     interactive = interactive || ReAuthService.consumeUserIntent();
+    // 已有内容时不铺整屏加载态：切页回来该立刻看到旧数据，新数据到了再替换
     setState(() {
-      _loading = true;
       _error = '';
+      if (_detail == null) {
+        _loading = true;
+      }
     });
     try {
-      final PlanDetail d = await AppState.instance.api.getPlanDetail();
+      final PageLoadResult<PlanDetail> r = await _loader().load(force: force);
       if (!mounted) {
         return;
       }
       setState(() {
-        _detail = d;
+        _detail = r.data;
         _loading = false;
       });
     } catch (e) {
@@ -102,38 +118,53 @@ class _PlanPageState extends State<PlanPage> {
         });
       }, interactive: interactive);
       if (renewed && mounted) {
-        await _load();
+        await _load(force: force);
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const LoadingView(message: '正在获取培养方案…');
-    }
     final PlanDetail? d = _detail;
+    // 有缓存内容就直接渲染，刷新与错误都在列表内部消化 ——
+    // 整屏替换会把用户已经在看的内容清掉，而培养方案是**基本不变**的数据，
+    // 加载失败把整页变空没有任何道理。
+    if (d != null && !(d.courses.isEmpty && d.introParagraphs.isEmpty)) {
+      return Stack(
+        children: <Widget>[
+          Positioned.fill(
+            child: AppRefresh(onRefresh: () => _load(force: true), child: _buildList(d)),
+          ),
+          const TopFadeBlur(),
+        ],
+      );
+    }
+    if (_loading) {
+      return const RefreshableFill(child: LoadingView(message: '正在获取培养方案…'));
+    }
     if (d == null) {
-      return ErrorView(message: _error.isEmpty ? '暂无培养方案数据' : _error, onRetry: () => _load(interactive: true));
+      return AppRefresh(
+        onRefresh: () => _load(force: true),
+        child: RefreshableFill(
+          child: ErrorView(
+              message: _error.isEmpty ? '暂无培养方案数据' : _error,
+              onRetry: () => _load(interactive: true, force: true)),
+        ),
+      );
     }
-    if (d.courses.isEmpty && d.introParagraphs.isEmpty) {
-      return const EmptyView(title: '暂无培养方案数据');
-    }
-    // 顶部渐变模糊：分组卡片向上滚过顶栏时逐渐糊掉，
-    // 避免透明顶栏下出现「两行文字叠着都清楚」的混乱。
-    //
-    // 用 Stack 而不是直接返回列表：模糊层要浮在滚动内容之上。
-    return Stack(
-      children: <Widget>[
-        Positioned.fill(child: _buildList(d)),
-        const TopFadeBlur(),
-      ],
+    // 取到了数据但内容为空（服务器上确实没有）：下拉仍然重新请求 ——
+    // 数据可能是刚发布的，再拉一次总比「拉不动」合理。
+    return AppRefresh(
+      onRefresh: () => _load(force: true),
+      child: const RefreshableFill(child: EmptyView(title: '暂无培养方案数据')),
     );
   }
 
   /// 页面主体列表（原 build 的内容，抽出以便被 Stack 包裹）
   Widget _buildList(PlanDetail d) {
     return ListView(
+          // 内容不满一屏也要能下拉刷新
+          physics: const AlwaysScrollableScrollPhysics(),
           // 底部额外留出玻璃导航栏的高度：extendBody 后内容会滚到 dock 下面，
           // 不留这段空白最后一项会被玻璃压住
           // 顶部让位放在**滚动内容**里（不是视口上），因此首项仍从顶栏下
@@ -145,6 +176,11 @@ class _PlanPageState extends State<PlanPage> {
             // 保存 PDF 的结果提示（成功/失败都在这里，见 _hint 的说明）
             if (_hint.isNotEmpty) ...<Widget>[
               _hintBanner(),
+              const SizedBox(height: Gaps.m),
+            ],
+            // 有缓存内容但这次刷新失败：提示一下，但**不**清掉内容
+            if (_error.isNotEmpty) ...<Widget>[
+              _staleBanner(),
               const SizedBox(height: Gaps.m),
             ],
             if (d.introParagraphs.isNotEmpty || d.detailParagraphs.isNotEmpty)
@@ -187,6 +223,22 @@ class _PlanPageState extends State<PlanPage> {
           _hint,
           style: TextStyle(fontSize: 12, color: context.brandColor),
         ),
+      ),
+    );
+  }
+
+  /// 「刷新失败，以下是缓存内容」提示条
+  Widget _staleBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: context.warningColor.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        _error,
+        style: TextStyle(fontSize: 12, color: context.textSecondary),
       ),
     );
   }

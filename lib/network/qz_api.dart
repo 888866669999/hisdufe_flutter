@@ -213,63 +213,133 @@ class QzApi {
     return TimetableParser.parse(res.body, semester, week);
   }
 
-  Future<List<ScoreRecord>> getScores(String semester) async {
+  // ==================== 「取原文」与「解析」分开 ====================
+  //
+  // 下面每个接口都成对出现：
+  //   `getXxxHtml()` —— 发请求、检查响应、返回**未解析的页面原文**
+  //   `getXxx()`     —— 把 `getXxxHtml()` 的结果解析成模型
+  //
+  // 拆开的原因是页面缓存（见 data/page_cache.dart）：缓存要存的是原文，
+  // 而不是解析后的模型 —— 这样缓存层只依赖「请求」这一件事，
+  // 解析器的任何修改都会自动作用于缓存的旧数据。
+  // 只做解析的那一层保持原样，调用方（不含缓存的场景）不受影响。
+
+  /// 成绩列表页原文
+  Future<String> getScoresHtml(String semester) async {
     final String url = semester.isEmpty
         ? '$kBaseOrigin$kPathScoreList'
         : '$kBaseOrigin$kPathScoreList?kksj=${Uri.encodeQueryComponent(semester)}';
     final HttpResponse res = await _client.get(url);
     _checkResponse(res);
-    return ScoreParser.parse(res.body);
+    return res.body;
   }
 
-  Future<List<ChoiceItem>> getScoreSemesters() async {
+  Future<List<ScoreRecord>> getScores(String semester) async =>
+      ScoreParser.parse(await getScoresHtml(semester));
+
+  /// 成绩查询页原文（学期下拉的来源）
+  Future<String> getScoreSemestersHtml() async {
     final HttpResponse res = await _client.get('$kBaseOrigin$kPathScoreQuery');
     _checkResponse(res);
-    return ScoreParser.readSemesters(res.body);
+    return res.body;
   }
 
-  Future<StudentProfile> getProfile() async {
+  Future<List<ChoiceItem>> getScoreSemesters() async =>
+      ScoreParser.readSemesters(await getScoreSemestersHtml());
+
+  /// 学籍卡片原文
+  Future<String> getProfileHtml() async {
     final HttpResponse res = await _client.get('$kBaseOrigin$kPathProfile');
     _checkResponse(res);
-    return ProfileParser.parse(res.body);
+    return res.body;
   }
 
-  Future<List<WeekDate>> getWeekCalendar() async {
-    final HttpResponse res = await _client.get('$kBaseOrigin$kPathWeekCalendar');
+  Future<StudentProfile> getProfile() async =>
+      ProfileParser.parse(await getProfileHtml());
+
+  /// 教学周历页原文。传 [semester] 则取指定学年的那学期。
+  ///
+  /// 这个页面是**唯一权威且能随年份自动更新**的校历数据源：
+  /// 它给出「第 N 周 ←→ 周一日期」的完整对照，学校每学期排课时录入，
+  /// 换学年后取到的自然是新数据。学校官网那张校历图只是它的图片版，
+  /// 图里能算的（周次、起止、寒暑假边界）这里都有结构化字段。
+  ///
+  /// 服务端的表单是 `post xnxq01id=<学期>`（onchange 自动提交），
+  /// 不传则返回当前学期。
+  Future<String> getWeekCalendarHtml([String semester = '']) async {
+    final HttpResponse res = semester.isEmpty
+        ? await _client.get('$kBaseOrigin$kPathWeekCalendar')
+        : await _client.postForm('$kBaseOrigin$kPathWeekCalendar', <FormField>[
+            FormField('xnxq01id', semester),
+          ]);
     _checkResponse(res);
-    return WeekCalendarParser.parseWeekDates(res.body);
+    return res.body;
   }
 
-  Future<PlanDetail> getPlanDetail() async {
+  Future<List<WeekDate>> getWeekCalendar([String semester = '']) async =>
+      WeekCalendarParser.parseWeekDates(await getWeekCalendarHtml(semester));
+
+  /// 周历页上「可选学期」列表（形如 2026-2027-1）。
+  ///
+  /// 以服务端返回的为准，而不是自己按当前年份推算：只有真正排过课的学期
+  /// 才会出现在这里，这样界面上就不会出现一个点进去空空如也的学期。
+  Future<List<ChoiceItem>> getWeekCalendarSemesters() async =>
+      WeekCalendarParser.parseSemesterOptions(await getWeekCalendarHtml());
+
+  /// 培养方案明细页原文
+  Future<String> getPlanHtml() async {
     final HttpResponse res = await _client.get('$kBaseOrigin$kPathPlanDetail');
     _checkResponse(res);
-    return PlanParser.parse(res.body);
+    return res.body;
   }
 
-  Future<ElectiveReport> getElectiveReport() async {
+  Future<PlanDetail> getPlanDetail() async => PlanParser.parse(await getPlanHtml());
+
+  /// 通选课修读情况原文
+  Future<String> getElectiveHtml() async {
     final HttpResponse res = await _client.get('$kBaseOrigin$kPathElective');
     _checkResponse(res);
-    return ElectiveParser.parse(res.body);
+    return res.body;
   }
 
-  Future<ClassroomOptions> getClassroomOptions() async {
+  Future<ElectiveReport> getElectiveReport() async =>
+      ElectiveParser.parse(await getElectiveHtml());
+
+  /// 教室查询页原文（校区/学期下拉的来源）
+  Future<String> getClassroomOptionsHtml() async {
     final HttpResponse res = await _client.get('$kBaseOrigin$kPathClassroom');
     _checkResponse(res);
-    return ClassroomOptions(
-      ClassroomParser.parseCampuses(res.body),
-      ClassroomParser.parseSemesters(res.body),
-    );
+    return res.body;
   }
 
-  Future<List<ChoiceItem>> getBuildings(String campusId) async {
+  Future<ClassroomOptions> getClassroomOptions() async =>
+      parseClassroomOptions(await getClassroomOptionsHtml());
+
+  /// 原文 → 选项。单独暴露是为了让缓存层用同一条解析路径
+  /// （缓存里存的是原文，需要解析时用这个，而不是再走一遍网络方法）。
+  static ClassroomOptions parseClassroomOptions(String body) => ClassroomOptions(
+        ClassroomParser.parseCampuses(body),
+        ClassroomParser.parseSemesters(body),
+      );
+
+  /// 教学楼列表原文（服务端 Content-Type 是 text/html，内容却是 JSON）
+  Future<String> getBuildingsHtml(String campusId) async {
     final HttpResponse res = await _client.postForm(
       '$kBaseOrigin$kPathBuildings',
       <FormField>[FormField('xqid', campusId)],
     );
     _checkResponse(res);
+    return res.body;
+  }
+
+  Future<List<ChoiceItem>> getBuildings(String campusId) async =>
+      parseBuildings(await getBuildingsHtml(campusId));
+
+  /// 原文 → 教学楼选项。同样单独暴露给缓存层复用。
+  static List<ChoiceItem> parseBuildings(String body) {
     final List<ChoiceItem> out = <ChoiceItem>[ChoiceItem('全部教学楼', '')];
     final RegExp re = RegExp(r'"dm"\s*:\s*"([^"]*)"\s*,\s*"dmmc"\s*:\s*"([^"]*)"');
-    for (final RegExpMatch m in re.allMatches(res.body)) {
+    for (final RegExpMatch m in re.allMatches(body)) {
       out.add(ChoiceItem(m.group(2) ?? '', m.group(1) ?? ''));
     }
     return out;
@@ -281,7 +351,10 @@ class QzApi {
   /// 「被借用」类记录不受周次影响，且筛选后会丢掉该周无占用记录的教室
   /// （而真正全周空闲的教室恰好都在被丢掉的那批里）。
   /// 拿到全学期占用文本后由客户端按周判断，见 classroom_models.dart 顶部说明。
-  Future<ClassroomResult> getClassroomUsage(
+  ///
+  /// 返回**原文**：解析要带上 sectionRow（节次决定要读哪两列），
+  /// 所以缓存层存的是原文，解析在取出时按当前的 sectionRow 做。
+  Future<String> getClassroomUsageHtml(
     String semester,
     String campusId,
     String buildingId,
@@ -301,8 +374,18 @@ class QzApi {
       ],
     );
     _checkResponse(res);
-    return ClassroomParser.parseResult(res.body, sectionRow);
+    return res.body;
   }
+
+  Future<ClassroomResult> getClassroomUsage(
+    String semester,
+    String campusId,
+    String buildingId,
+    int sectionRow,
+  ) async =>
+      ClassroomParser.parseResult(
+          await getClassroomUsageHtml(semester, campusId, buildingId, sectionRow),
+          sectionRow);
 
   // ==================== 内部 ====================
 

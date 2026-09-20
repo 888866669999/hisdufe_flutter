@@ -1,7 +1,7 @@
 name: hisdufe_jw
 description: 山东财经大学强智教务系统客户端（Android · 手机/平板/折叠屏）
 publish_to: 'none'
-version: 1.0.0+1000000
+version: 1.0.1+1000001
 
 environment:
   sdk: ^3.12.2
@@ -86,8 +86,13 @@ flutter:
     - shaders/top_fade_blur.frag
   assets:
     - assets/captcha.onnx
-    - assets/calendar_2026_1.jpg
-    - assets/calendar_2026_2.jpg
+    # 校历**不再内置图片**：一年换一张，内置的会静默过期
+    # （换学年后界面仍是去年的图，用户照它安排行程）。
+    # 现在校历的全部内容由「教务系统教学周历」实时生成：
+    # 「第 N 周 ←→ 周一日期」是结构化数据，学校每学期录入，自动随年份更新。
+    # 官网校历图仍可看，但只在**联网抓到当期版本**时才显示 ——
+    # 见 data/semester_calendar_service.dart 与 widgets/calendar_sheet.dart。
+    #
     # 校徽：启动闪屏与登录页显示它，代替 Material 的 `Icons.school`
     # （那个是「带学士帽的小人」的通用占位图，与本校无关）。
     # 由 tools/make_app_icon.py 从原始笔触图生成（白底反解为透明）。

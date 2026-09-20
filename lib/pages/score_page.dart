@@ -5,17 +5,26 @@
 /// 一条产品决定：**筛选栏在空数据时也要显示**。
 /// 早期版本把筛选栏挂在「有数据」的条件下，导致没有成绩的学期整页空白，
 /// 用户以为界面坏了、也没法切回别的学期。
+///
+/// ===== 两个缓存 key =====
+/// 学期下拉（`score_semesters`）与成绩列表（`score_list`）分别缓存，
+/// 且成绩列表的 key 带**学期**作为变体：每个学期的成绩互相独立，
+/// 切回看过的学期能直接出结果。学期下拉单独缓存是因为它几乎不变
+/// （一学期才多一条），没必要每次进页面都拉一遍。
 library;
 
 import 'package:flutter/material.dart';
 
+import '../common/constants.dart';
 import '../data/app_state.dart';
 import '../data/re_auth_service.dart';
+import '../data/page_cache.dart';
 import '../data/pref_store.dart';
 import '../model/models.dart';
 import '../parser/score_parser.dart';
 import '../theme/glass_kit.dart';
 import '../theme/theme.dart';
+import '../widgets/app_refresh.dart';
 import '../widgets/glass_picker.dart';
 import '../widgets/glass_picker_field.dart';
 import '../widgets/state_views.dart';
@@ -74,6 +83,9 @@ class _ScorePageState extends State<ScorePage> {
     super.initState();
     _scrollCtrl.addListener(_onScroll);
     _semester = PrefStore.loadLastScoreSemester();
+    // 先用内存缓存填首帧，再决定要不要联网（避免切页回来闪加载态）
+    _records = _listLoader().peek() ?? <ScoreRecord>[];
+    _semesters = _semesterLoader().peek() ?? <ChoiceItem>[];
     _load();
   }
 
@@ -85,30 +97,62 @@ class _ScorePageState extends State<ScorePage> {
     super.dispose();
   }
 
-  Future<void> _load({bool interactive = false}) async {
+  /// 成绩列表的加载器。key 带学期作变体，各学期独立缓存。
+  ///
+  /// 每次现取（不缓存字段）：账号或学期变了 key 就得变，
+  /// 留在字段里会出现「切了学期还在读上一个学期的缓存」这类错位。
+  PageDataLoader<List<ScoreRecord>> _listLoader() => PageDataLoader<List<ScoreRecord>>(
+        key: PageCache.keyOf(
+            AppState.instance.account, kCacheScoreList, <String>[_semester]),
+        fetch: () => _app.api.getScoresHtml(_semester),
+        parse: ScoreParser.parse,
+        ttl: kTtlScoreList,
+      );
+
+  /// 学期下拉的加载器（不带学期变体：它本身就是「所有学期」）
+  PageDataLoader<List<ChoiceItem>> _semesterLoader() =>
+      PageDataLoader<List<ChoiceItem>>(
+        key: PageCache.keyOf(AppState.instance.account, kCacheScoreSemesters),
+        fetch: _app.api.getScoreSemestersHtml,
+        parse: ScoreParser.readSemesters,
+        ttl: kTtlScoreSemesters,
+      );
+
+  Future<void> _load({bool interactive = false, bool force = false}) async {
     // 用户点导航进来的首次加载同样算「主动操作」：
     // 否则会话失效时只会给一句内联提示，逼迫用户再点一次「重试」。
     // 标记是一次性的（取走即清零），冷启动不受影响。
     interactive = interactive || ReAuthService.consumeUserIntent();
+    // 已有内容时不铺整屏加载态：切页回来该立刻看到旧数据，新数据到了再替换
     setState(() {
-      _loading = true;
       _error = '';
+      if (_records.isEmpty && _semesters.isEmpty) {
+        _loading = true;
+      }
     });
     try {
-      // 学期下拉与成绩列表是两个地址，先取下拉（失败不致命）
-      List<ChoiceItem> sems = <ChoiceItem>[];
+      // 学期下拉失败不致命：成绩列表才是这一页的主体，
+      // 拿不到学期列表顶多是筛选器少几个选项、切不了学期。
+      List<ChoiceItem> sems;
       try {
-        sems = await _app.api.getScoreSemesters();
+        sems = (await _semesterLoader().load(force: force)).data;
       } catch (_) {
-        sems = <ChoiceItem>[];
+        sems = _semesters;
       }
-      final List<ScoreRecord> recs = await _app.api.getScores(_semester);
+      final List<ScoreRecord> recs =
+          (await _listLoader().load(force: force)).data;
       if (!mounted) {
         return;
       }
       setState(() {
         _semesters = sems;
-        _records = recs;
+        // 本地已有数据时，网络返回空结果**不覆盖**：
+        // 这多半是服务端那次查询异常（而不是「成绩被删了」），
+        // 清空会让用户以为数据丢了。
+        // 真没有成绩的学期，本来就不会有缓存，走的也是这条 else 之外的分支。
+        if (recs.isNotEmpty || _records.isEmpty) {
+          _records = recs;
+        }
         _loading = false;
       });
     } catch (e) {
@@ -124,7 +168,7 @@ class _ScorePageState extends State<ScorePage> {
         });
       }, interactive: interactive);
       if (renewed && mounted) {
-        await _load();
+        await _load(force: force);
       }
     }
   }
@@ -161,12 +205,23 @@ class _ScorePageState extends State<ScorePage> {
               // 早先这里包了一层 `Padding(top: _filterHeight)`，那是在给
               // **视口**加内边距 —— 列表被整体下移并裁在 y=60 以下，内容
               // 永远不可能出现在筛选栏底下，于是「透过玻璃看见下方课程」
-              // 根本无从谈起（玻璃再透也没东西可透）。
+              // 无从谈起（玻璃再透也没东西可透）。
               //
               // 让位改由列表自己的 `padding.top` 承担（见 _body）：ListView
               // 的内边距随内容滚动，因此首项仍然从栏下开始，而后续课程行
               // 会滚到栏底下、透过玻璃可见。
-              _body(),
+              //
+              // 下拉刷新包在**列表之外、Stack 之内**：筛选栏与统计条不该
+              // 跟着被下拉，只有列表内容应该。
+              //
+              // topInset 取筛选栏高度：本页由外壳补的顶部让位（不在
+              // shell.dart 的 pageHandlesTopInset 名单里），指示器落点应当
+              // 在筛选栏**下方**，否则会压在筛选栏上。
+              AppRefresh(
+                onRefresh: () => _load(force: true),
+                topInset: _filterHeight + Gaps.s,
+                child: _body(),
+              ),
               AnimatedPositioned(
                 duration: const Duration(milliseconds: 180),
                 curve: Curves.easeOut,
@@ -334,17 +389,24 @@ class _ScorePageState extends State<ScorePage> {
 
   Widget _body() {
     if (_loading) {
-      return const LoadingView(message: '正在获取成绩…');
+      return const RefreshableFill(child: LoadingView(message: '正在获取成绩…'));
     }
     if (_records.isEmpty) {
-      return const EmptyView(title: '暂无成绩数据');
+      // 空态也要能下拉刷新：没有成绩时用户最可能想再试一次
+      return RefreshableFill(
+        child: EmptyView(
+          title: _error.isEmpty ? '暂无成绩数据' : _error,
+        ),
+      );
     }
     final List<ScoreRecord> list = _filtered;
     if (list.isEmpty) {
-      return const EmptyView(title: '没有匹配的课程');
+      return const RefreshableFill(child: EmptyView(title: '没有匹配的课程'));
     }
     return ListView.separated(
       controller: _scrollCtrl,
+      // 内容不满一屏也要能下拉刷新（否则成绩少的时候拉不动）
+      physics: const AlwaysScrollableScrollPhysics(),
       // 顶部：给浮层筛选栏让出高度（+ 常规页边距），使首项从栏下开始；
       // 这部分内边距**随内容滚动**，所以往下滚时课程行会升到筛选栏底下
       // 并被玻璃透出来 —— 这正是「栏底透明、能看见下方内容」的实现方式。

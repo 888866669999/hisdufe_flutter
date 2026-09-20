@@ -7,6 +7,17 @@
 /// 所以「重新请求」本身就是刷新数据的一部分，不该要求用户再点一次。
 ///
 /// 周次过滤在客户端做（原因见 `model/classroom_models.dart` 顶部说明）。
+///
+/// ===== 缓存与「点了就重新请求」并不矛盾 =====
+/// 这里有三类触发，之前都会被当成「必须联网」：
+///   1. 改学期/校区/教学楼/节次 —— 改的是**查询条件**，key 变了就是换数据，
+///      联网合理（而且切回上一个条件时能命中缓存）；
+///   2. 点星期几 —— **查询条件没变**。服务端返回的本来就是全周占用，
+///      换一天只是换客户端读哪一列。之前却重发了一次请求，拿回一模一样的
+///      文本再解析一遍；
+///   3. 切 dock 进来 —— 见文件顶部的说明。
+/// 第 2 类现在直接命中缓存（TTL 见 [kTtlClassroomUsage]），
+/// 数据的实时性由 TTL 保证：超过 2 分钟再点任何条件都会真的联网。
 library;
 
 import 'package:flutter/material.dart';
@@ -15,12 +26,15 @@ import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 
 import '../common/constants.dart';
 import '../data/app_state.dart';
+import '../data/page_cache.dart';
 import '../data/re_auth_service.dart';
 import '../model/classroom_models.dart';
 import '../model/models.dart';
 import '../network/qz_api.dart';
+import '../parser/classroom_parser.dart';
 import '../theme/glass_kit.dart';
 import '../theme/theme.dart';
+import '../widgets/app_refresh.dart';
 import '../widgets/glass_picker.dart';
 import '../widgets/glass_picker_field.dart';
 import '../widgets/state_views.dart';
@@ -78,11 +92,15 @@ class _ClassroomPageState extends State<ClassroomPage> {
     // 而不是只给一句提示、逼用户再点一次。
     interactive = interactive || ReAuthService.consumeUserIntent();
     setState(() {
-      _loading = true;
       _error = '';
+      if (_campuses.isEmpty) {
+        _loading = true;
+      }
     });
     try {
-      final ClassroomOptions opts = await _app.api.getClassroomOptions();
+      // 校区与学期列表（几乎不变的元数据，缓存 6 小时）
+      final ClassroomOptions opts =
+          (await _optionsLoader().load()).data;
       if (!mounted) {
         return;
       }
@@ -104,8 +122,14 @@ class _ClassroomPageState extends State<ClassroomPage> {
       setState(() {
         _campuses = opts.campuses;
         _semesters = opts.semesters;
-        _campus = campus;
-        _semester = semester;
+        // 已经在页面上选过条件的（比如切页返回），保留用户的选择，
+        // 不要被「默认选章丘」覆盖掉
+        if (_campus.isEmpty || !opts.campuses.contains(_campus)) {
+          _campus = campus;
+        }
+        if (_semester.isEmpty || !opts.semesters.contains(_semester)) {
+          _semester = semester;
+        }
       });
       await _loadBuildings();
       await _search(interactive: interactive);
@@ -127,13 +151,50 @@ class _ClassroomPageState extends State<ClassroomPage> {
     }
   }
 
+  /// 校区/学期列表的加载器（与查询条件无关，全账号一份）
+  PageDataLoader<ClassroomOptions> _optionsLoader() =>
+      PageDataLoader<ClassroomOptions>(
+        key: PageCache.keyOf(AppState.instance.account, kCacheClassroomOptions),
+        fetch: _app.api.getClassroomOptionsHtml,
+        parse: QzApi.parseClassroomOptions,
+        ttl: kTtlClassroomOptions,
+      );
+
+  /// 某校区教学楼列表的加载器（key 带校区作变体）
+  PageDataLoader<List<ChoiceItem>> _buildingsLoader(String campusId) =>
+      PageDataLoader<List<ChoiceItem>>(
+        key: PageCache.keyOf(
+            AppState.instance.account, kCacheClassroomBuildings, <String>[campusId]),
+        fetch: () => _app.api.getBuildingsHtml(campusId),
+        parse: QzApi.parseBuildings,
+        ttl: kTtlClassroomBuildings,
+      );
+
+  /// 占用情况的加载器。
+  ///
+  /// key 带**全部查询条件**作变体（含节次）：不同条件返回的是不同表格，
+  /// 混用会让用户看到别的条件的教室。星期与周次**不进 key** ——
+  /// 服务端返回的本来就是整个学期的全周占用，那两项只是客户端读哪一列的选择。
+  PageDataLoader<ClassroomResult> _usageLoader() => PageDataLoader<ClassroomResult>(
+        key: PageCache.keyOf(AppState.instance.account, kCacheClassroomUsage, <String>[
+          _semester,
+          _campus.split('|').first,
+          _building,
+          '$_sectionRow',
+        ]),
+        fetch: () => _app.api.getClassroomUsageHtml(
+            _semester, _campus.split('|').first, _building, _sectionRow),
+        parse: (String html) => ClassroomParser.parseResult(html, _sectionRow),
+        ttl: kTtlClassroomUsage,
+      );
+
   Future<void> _loadBuildings() async {
     if (_campus.isEmpty) {
       return;
     }
     final String campusId = _campus.split('|').first;
     try {
-      final List<ChoiceItem> list = await _app.api.getBuildings(campusId);
+      final List<ChoiceItem> list = (await _buildingsLoader(campusId).load()).data;
       if (!mounted) {
         return;
       }
@@ -151,7 +212,7 @@ class _ClassroomPageState extends State<ClassroomPage> {
     }
   }
 
-  Future<void> _search({bool interactive = false}) async {
+  Future<void> _search({bool interactive = false, bool force = false}) async {
     if (_semester.isEmpty || _campus.isEmpty) {
       setState(() {
         _loading = false;
@@ -165,12 +226,7 @@ class _ClassroomPageState extends State<ClassroomPage> {
       _error = '';
     });
     try {
-      final ClassroomResult r = await _app.api.getClassroomUsage(
-        _semester,
-        _campus.split('|').first,
-        _building,
-        _sectionRow,
-      );
+      final ClassroomResult r = (await _usageLoader().load(force: force)).data;
       if (!mounted || mySeq != _seq) {
         // 过期响应：丢弃
         return;
@@ -196,7 +252,7 @@ class _ClassroomPageState extends State<ClassroomPage> {
         });
       }, interactive: interactive);
       if (renewed && mounted) {
-        await _search(interactive: interactive);
+        await _search(interactive: interactive, force: force);
       }
     }
   }
@@ -410,10 +466,11 @@ class _ClassroomPageState extends State<ClassroomPage> {
       }
     }
     return GestureDetector(
-      onTap: () async {
+      onTap: () {
+        // 换一天**不需要联网**：服务端返回的是全周占用，换天只是换读哪一列。
+        // 之前这里会重发一次请求、拿回一模一样的文本再解析一遍
+        // （数据实时性由 TTL 保证，见文件头）。
         setState(() => _day = day);
-        // 点同一天也重新请求：这是一次数据刷新
-        await _search(interactive: true);
       },
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 2),
@@ -455,18 +512,34 @@ class _ClassroomPageState extends State<ClassroomPage> {
   }
 
   Widget _body() {
+    // 本页由外壳补的顶部让位（不在 shell.dart 的 pageHandlesTopInset 名单里），
+    // 而且筛选卡片就在本组件上方 —— 指示器落在本区域顶部即可，不能再用
+    // 默认的 appBarInset（那会把它推到筛选卡片中间）。
+    const double rest = Gaps.m;
     if (_error.isNotEmpty) {
-      return ErrorView(message: _error, onRetry: () => _search(interactive: true));
+      return AppRefresh(
+        onRefresh: () => _search(force: true),
+        topInset: rest,
+        child: RefreshableFill(
+          child: ErrorView(message: _error, onRetry: () => _search(interactive: true, force: true)),
+        ),
+      );
     }
     final ClassroomResult? r = _result;
     // 数据还没回来：这里只占位，控件已经在上面正常显示了
     if (r == null) {
-      return const LoadingView(message: '正在查询空闲教室…');
+      return const RefreshableFill(child: LoadingView(message: '正在查询空闲教室…'));
     }
     if (r.rooms.isEmpty) {
-      return const EmptyView(
-        title: '没有查到教室',
-        hint: '该条件下没有教室数据，可换教学楼或节次再试',
+      return AppRefresh(
+        onRefresh: () => _search(force: true),
+        topInset: rest,
+        child: const RefreshableFill(
+          child: EmptyView(
+            title: '没有查到教室',
+            hint: '该条件下没有教室数据，可换教学楼或节次再试',
+          ),
+        ),
       );
     }
     final List<FreeRoom> free = _freeRooms();
@@ -502,57 +575,63 @@ class _ClassroomPageState extends State<ClassroomPage> {
     final bool hasEmpty = free.isEmpty;
     final int total = headCount + (hasEmpty ? 1 : buildings.length) + 1;
 
-    return ListView.builder(
-      // 底部额外留出玻璃导航栏的高度：extendBody 后内容会滚到 dock 下面，
-      // 不留这段空白最后一项会被玻璃压住
-      padding: const EdgeInsets.fromLTRB(
-          Gaps.page, Gaps.page, Gaps.page, Gaps.page + Gaps.scrollTail),
-      // 多留一屏缓存：滚动时下一组已就绪，不会滑到一半才出现
-      scrollCacheExtent: const ScrollCacheExtent.viewport(1.0),
-      itemCount: total,
-      itemBuilder: (BuildContext ctx, int i) {
-        if (i == 0) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Text(
-              '共 ${r.rooms.length} 间教室，${section.label}，第 $_week 周',
-              style: TextStyle(fontSize: 12, color: context.textTertiary),
-            ),
-          );
-        }
-        if (i == 1) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Row(
-              children: <Widget>[
-                Text('${ClassroomFinder.dayLabel(_day)} 空闲教室',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: context.textPrimary,
-                    )),
-                const Spacer(),
-                Text('${free.length} 间',
-                    style: TextStyle(fontSize: 13, color: context.brandColor)),
-              ],
-            ),
-          );
-        }
-        if (hasEmpty) {
-          if (i == 2) {
-            return const Padding(
-              padding: EdgeInsets.symmetric(vertical: 24),
-              child: EmptyView(title: '该时段没有空闲教室'),
+    return AppRefresh(
+      onRefresh: () => _search(force: true),
+      topInset: rest,
+      child: ListView.builder(
+        // 内容不满一屏也要能下拉刷新
+        physics: const AlwaysScrollableScrollPhysics(),
+        // 底部额外留出玻璃导航栏的高度：extendBody 后内容会滚到 dock 下面，
+        // 不留这段空白最后一项会被玻璃压住
+        padding: const EdgeInsets.fromLTRB(
+            Gaps.page, Gaps.page, Gaps.page, Gaps.page + Gaps.scrollTail),
+        // 多留一屏缓存：滚动时下一组已就绪，不会滑到一半才出现
+        scrollCacheExtent: const ScrollCacheExtent.viewport(1.0),
+        itemCount: total,
+        itemBuilder: (BuildContext ctx, int i) {
+          if (i == 0) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Text(
+                '共 ${r.rooms.length} 间教室，${section.label}，第 $_week 周',
+                style: TextStyle(fontSize: 12, color: context.textTertiary),
+              ),
             );
           }
+          if (i == 1) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(
+                children: <Widget>[
+                  Text('${ClassroomFinder.dayLabel(_day)} 空闲教室',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: context.textPrimary,
+                      )),
+                  const Spacer(),
+                  Text('${free.length} 间',
+                      style: TextStyle(fontSize: 13, color: context.brandColor)),
+                ],
+              ),
+            );
+          }
+          if (hasEmpty) {
+            if (i == 2) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: EmptyView(title: '该时段没有空闲教室'),
+              );
+            }
+            return _busyFooter(busy);
+          }
+          final int gi = i - headCount;
+          if (gi < buildings.length) {
+            return _buildingCard(buildings[gi], grouped[buildings[gi]]!);
+          }
           return _busyFooter(busy);
-        }
-        final int gi = i - headCount;
-        if (gi < buildings.length) {
-          return _buildingCard(buildings[gi], grouped[buildings[gi]]!);
-        }
-        return _busyFooter(busy);
-      },
+        },
+      ),
     );
   }
 

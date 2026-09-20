@@ -288,7 +288,7 @@ class HttpClient {
     _absorb(cookies);
 
     // 中文页面多为 GBK/UTF-8 混用；该校页面实测是 UTF-8。
-    // 若出现乱码，改用 gbk 解码（见 README 的已知问题）。
+    // 若出现乱码，改用 gbk 解码（见 docs/技术笔记.md 的已知限制）。
     final String body = _decode(res);
     return HttpResponse(
       statusCode: res.statusCode,

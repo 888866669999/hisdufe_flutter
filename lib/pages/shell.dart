@@ -19,9 +19,12 @@ import 'package:flutter/material.dart';
 import '../data/app_state.dart';
 import '../data/campus_calendar_service.dart';
 import '../data/credential_store.dart';
+import '../data/pref_store.dart';
 import '../data/reminder_service.dart';
 import '../data/re_auth_service.dart';
+import '../data/semester_calendar_service.dart';
 import '../data/week_service.dart';
+import '../model/models.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../theme/glass_kit.dart';
@@ -165,6 +168,10 @@ class _AppShellState extends State<AppShell> {
 
     // 与系统时间对齐当前周（超过 6 小时才真正重算）
     await WeekService.align();
+    // 开学日期没设过时，从教务系统的教学周历里取 —— 那份数据学校每学期录入，
+    // 因此**换学年会自动跟上**，用户不必手动填日期。
+    // 放在 align 之后：先让用户手填的值生效，只在空缺时才去补。
+    await _deriveSemesterStartIfMissing();
     if (mounted) {
       setState(() => _restoring = false);
     }
@@ -175,6 +182,35 @@ class _AppShellState extends State<AppShell> {
     // 校历/作息：只在缓存过期时才联网（学校一学期才更新一次，
     // 每次启动都抓纯属浪费流量与电量）
     _refreshCampusCalendarIfStale();
+  }
+
+  /// 开学日期为空时，用教学周历补上。
+  ///
+  /// 为什么值得做：周次显示、上课提醒、桌面卡片全都依赖开学日期，
+  /// 而在此之前它**只能靠用户手动设置** —— 不设就一律算不出周次，
+  /// 首次安装的用户看到的就是「第 1 周」这种默认值。
+  /// 权威值本来就在教务系统的周历里，取一次即可。
+  ///
+  /// 失败静默：断网时什么都不做，界面与以前一致。
+  Future<void> _deriveSemesterStartIfMissing() async {
+    if (_app.semesterStart.isNotEmpty) {
+      return;
+    }
+    // 优先用课表里带的学期（更贴合用户当前看的那个），
+    // 课表还没加载过则退回上次用过的学期
+    String code = _app.timetable?.semester ?? '';
+    if (code.isEmpty) {
+      code = PrefStore.loadLastSemester();
+    }
+    if (code.isEmpty) {
+      // 两个都没有（全新安装、还没进过课表）→ 交给服务端给的当前学期
+      final List<ChoiceItem> sems = await SemesterCalendarService.semesters();
+      if (sems.isEmpty) {
+        return;
+      }
+      code = sems.first.value;
+    }
+    await SemesterCalendarService.load(code);
   }
 
   /// 校历缓存超过 7 天就后台静默刷新一次。
