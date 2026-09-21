@@ -10,14 +10,13 @@
 
 | 模块 | 状态 | 说明 |
 |---|---|---|
-| 登录（图形验证码） | 完成 | 三步式；本机 ONNX 推理识别验证码（实测 92%）；可记住账号密码（系统密钥库） |
-| 课表 | 完成 | 整周固定一屏（7 天 × 5 节同时可见）；按账号本地缓存，**支持本地增删改**；单双周/周次过滤 |
-| 成绩 | 完成 | 学期筛选 + 搜索 + 客户端汇总（总学分/加权绩点） |
-| 培养方案 | 完成 | 课程设置总表（可折叠）+ **PDF 附件下载**（走系统「另存为」） |
-| 通选课修读情况 | 完成 | **大类 → 具体课程**（可折叠，默认收起）；类别进度 |
+| 课表 | 完成 | 按单双周显示本周课程|
+| 成绩 | 完成 | 学期筛选 + 搜索  |
+| 培养方案 | 完成 | 课程设置总表+ **PDF 附件下载** |
+| 通选课修读情况 | 完成 | **大类 → 具体课程**；类别进度 |
 | 空教室查询 | 完成 | 全自动查询；客户端做周次过滤 |
 | 个人信息 | 完成 | 学籍卡片分组展示 |
-| 桌面卡片 | 完成 | Android App Widget，课表改动**自动同步** |
+| 桌面卡片 | 完成 |自动按时间同步高亮显示下一节课程 |
 | 上课提醒 | 完成 | 本地通知，系统托管，应用关闭仍触发 |
 | 作息表 | 完成 | 作息表取自学校官网 |
 | 界面材质 | 完成 | 液态玻璃 / Material 3 两套，设置里可切换 |
@@ -101,54 +100,8 @@ flutter test
 
 ---
 
-## 开源致谢
 
-这个客户端能成立，靠的是下面这些开源项目。
 
-### UI 与视觉
-
-| 项目 | 许可 | 作用 |
-|---|---|---|
-| [**liquid_glass_widgets**](https://github.com/sdegenaar/liquid_glass_widgets) | MIT | 液态玻璃效果的全部实现（只用其 `AdaptiveGlass` 自适应封装：核心部分的 `LiquidGlass` 依赖 Impeller，在 Skia 上不渲染）。 |
-| [**cupertino_icons**](https://github.com/flutter/packages/tree/main/packages/cupertino_icons) | MIT | 图标字形。 |
-
-### 数据、存储与系统能力
-
-| 项目 | 许可 | 作用 |
-|---|---|---|
-| [**shared_preferences**](https://pub.dev/packages/shared_preferences) | BSD-3-Clause | 偏好设置持久化。 |
-| [**flutter_secure_storage**](https://github.com/juliansteenbakker/flutter_secure_storage) | BSD-3-Clause | 账号密码与会话 cookie 的加密存储（Android Keystore）。 |
-| [**path_provider**](https://pub.dev/packages/path_provider) | BSD-3-Clause | 定位应用私有目录（课表缓存、PDF 落盘）。 |
-| [**home_widget**](https://github.com/ABausG/home_widget) | BSD-3-Clause | 桌面「今日课程」卡片的 Dart↔原生桥。 |
-| [**image_picker**](https://pub.dev/packages/image_picker) | Apache-2.0 | 头像选图（裁切是应用内自绘的）。 |
-
-### 通知与提醒
-
-| 项目 | 许可 | 作用 |
-|---|---|---|
-| [**flutter_local_notifications**](https://github.com/MaikuB/flutter_local_notifications) | BSD-3-Clause | 上课提醒的唯一通道（`zonedSchedule` 由系统 AlarmManager 托管）。 |
-| [**timezone**](https://pub.dev/packages/timezone) | BSD-2-Clause | `zonedSchedule` 所需的时区计算。 |
-
-### 验证码识别
-
-| 项目 | 许可 | 作用 |
-|---|---|---|
-| [**ddddocr**](https://github.com/sml2h3/ddddocr) | MIT | 验证码识别模型（`assets/captcha.onnx`，原版量化模型 13 MB）。 |
-| [**onnxruntime**](https://github.com/gtbluesky/onnxruntime_flutter) | MIT | 在设备上跑 ONNX 模型。 |
-| [**image**](https://github.com/brendan-duncan/image) | MIT | 验证码预处理（解码、缩放、灰度归一化）。 |
-
-### 网络与工具
-
-| 项目 | 许可 | 作用 |
-|---|---|---|
-| [**http**](https://github.com/dart-lang/http) | BSD-3-Clause | HTTP 客户端。 |
-| [**flutter_lints**](https://github.com/flutter/packages/tree/main/packages/flutter_lints) | BSD-3-Clause | 静态检查规则（开发期依赖）。 |
-
-### 框架
-
-[**Flutter**](https://github.com/flutter/flutter) / [**Dart**](https://github.com/dart-lang/sdk) —— BSD-3-Clause。
-
----
 
 ### 非代码来源
 
@@ -160,7 +113,7 @@ flutter test
 
 以 MIT 许可开源，见 [LICENSE](LICENSE)。
 
-由同作者的鸿蒙版（ArkTS）移植而来；鸿蒙版未开源。
+由同作者的鸿蒙版（ArkTS）移植而来；鸿蒙版尚未开源。
 
 **免责声明**：本项目为个人学习用途的第三方客户端，与山东财经大学无隶属关系，
 仅供查询本人教务数据。请遵守学校相关规定，不要用于批量抓取或任何非本人用途。
