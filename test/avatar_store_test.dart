@@ -29,8 +29,17 @@ void main() {
 
   tearDown(() async {
     AvatarStore.setDirectoryForTest(null);
-    if (await tmp.exists()) {
+    // 用 try/catch 而不是「先判断后删除」：两者之间有窗口，
+    // 而 AvatarStore.clear() 会删掉临时目录里的文件，测试之间还可能复用同一路径，
+    // 于是 exists() 为真、delete() 时目标已消失，抛 PathNotFoundException。
+    // 清理动作本该幂等：删不掉说明已经干净，不该让用例失败。
+    //
+    // （这个竞态在写 OHOS 端时才暴露出来 —— 换用 Flutter 3.44.9 的
+    //  fork 跑同一份用例，执行顺序不同就必然触发。）
+    try {
       await tmp.delete(recursive: true);
+    } on FileSystemException {
+      // 已被清理，忽略
     }
   });
 
