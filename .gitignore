@@ -18,10 +18,12 @@ migrate_working_dir/
 *.iws
 .idea/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+# VS Code 的本机配置（`.vscode/`）
+#
+# Flutter 模板默认把这行注释掉，理由是「你可能想共享调试配置」。
+# 但本项目里的 settings.json 只有一条 `git.ignoreLimitWarning`
+# —— 那是个人偏好（关掉一个警告），与项目无关。
+.vscode/
 
 # Flutter/Dart/Pub related
 **/doc/api/
@@ -57,15 +59,24 @@ app.*.map.json
 hs_err_pid*.log
 flutter_*.log
 
-# ===== 验证码自检语料（不入库）=====
+# ===== 开发期工具（本地保留，不入库）=====
 #
-# 这些是从学校系统**实际抓取**的验证码图片（文件名里的前缀就是答案）。
-# 不含任何个人信息，但它属于第三方系统的数据，公开发布不妥；
-# 对使用者也没有必要 —— 识别效果在设备上跑一次自检就能看到。
+# `tools/` 里是开发时用的脚本：图标生成、验证码语料、帧耗时分析、
+# 模型量化评估、开源前审计。
 #
-# 本地仍保留在 tools/ocr_eval/，`flutter test` 会用它校验预处理尺寸
-# （见 test/captcha_pipeline_test.dart：目录不存在时自动跳过）。
-/tools/ocr_eval/
+# 它们**不参与构建、也不影响使用者**（clone 下来照样能 `flutter build`），
+# 属于开发者的工作工具而非项目本体 —— 就像不会把 IDE 配置一起开源。
+# 因此整目录排除，本地文件保持可用。
+#
+# 注意：`git rm --cached` 只停止跟踪，文件仍在工作区；
+# 但**已被跟踪过的文件不受 .gitignore 影响**，必须先 rm 掉索引记录。
+/tools/
+
+# 语料（tools/ocr_eval/）本就在这棵树下面，被上面那条覆盖。
+# 它是从学校系统实际抓取的验证码图片（文件名前缀就是答案），
+# 不含个人信息但属于第三方系统数据，公开发布不妥；
+# `flutter test` 用它校验预处理尺寸时会自动跳过不存在的目录
+# （见 test/captcha_pipeline_test.dart）。
 
 # ===== 构建产物：打进仓库会让 clone 变成几百 MB（不进库）=====
 #
